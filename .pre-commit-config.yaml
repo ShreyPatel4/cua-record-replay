@@ -14,8 +14,8 @@ repos:
         language: system
         types: [python]
       - id: secret-leak-scan
-        name: secret leak scan (uses your real .env)
-        entry: uv run pytest tests/test_leaks.py tests/test_repo_rules.py -q
+        name: secret leak scan (requires your real .env)
+        entry: env CUA_REQUIRE_SECRET_SCAN=1 uv run pytest tests/test_leaks.py tests/test_repo_rules.py -q
         language: system
         pass_filenames: false
         always_run: true

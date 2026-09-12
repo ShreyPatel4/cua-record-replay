@@ -2,7 +2,11 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   gate:
@@ -11,9 +15,10 @@ jobs:
     env:
       CORELEDGER_OPERATOR_USER: operator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v6
+      # setup-uv no longer publishes floating major tags, so pin the full version.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
 
@@ -23,8 +28,8 @@ jobs:
           echo "::add-mask::$pw"
           echo "CORELEDGER_OPERATOR_PASSWORD=$pw" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        run: uv sync --frozen
+      - name: Install dependencies (fails if uv.lock is out of date)
+        run: uv sync --locked
 
       - name: Install Chromium
         run: uv run playwright install --with-deps chromium
@@ -37,19 +42,20 @@ jobs:
       - name: Type check
         run: uv run mypy
 
-      - name: Tests
+      - name: Tests (includes the secret leak scan)
         run: uv run pytest
 
       - name: Boot mock app through the CLI and hit every injection route
         run: |
           uv run cua mock serve --port 5050 > mock.log 2>&1 &
-          for _ in $(seq 1 50); do
-            curl -sf http://127.0.0.1:5050/login > /dev/null && break
+          for _ in $(seq 1 100); do
+            curl -sf http://127.0.0.1:5050/login > /dev/null && ready=1 && break
             sleep 0.2
           done
+          if [ -z "${ready:-}" ]; then echo "mock app never became ready"; cat mock.log; exit 1; fi
           uv run cua mock smoke --base-url http://127.0.0.1:5050
 
-      - name: Secret leak scan
+      - name: Secret leak scan, after the smoke run has produced logs
         run: uv run pytest tests/test_leaks.py -q
 
       - name: Mock app log on failure

@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{# With an interstitial the card stays hidden (out of the a11y tree and unreadable) until OK. #}
+<div class="card" {% if interstitial %}style="visibility:hidden"{% endif %}>
 <table class="pnl" width="100%" cellpadding="2">
   <tr><td class="hdr" colspan="2">Member profile</td></tr>
   <tr>
@@ -29,6 +31,7 @@
     <a href="/members/search">Back to search</a>
   </td></tr>
 </table>
+</div>
 {% if interstitial %}
 <div class="shade">
   <table class="dlg" cellpadding="4">
@@ -38,7 +41,7 @@
       {% if sticky %}
       <span class="btn" onclick="void(0)">OK</span>
       {% else %}
-      <span class="btn" onclick="this.parentNode.parentNode.parentNode.parentNode.parentNode.style.display='none'">OK</span>
+      <span class="btn" onclick="document.querySelector('div.card').style.visibility='visible'; document.querySelector('div.shade').style.display='none'">OK</span>
       {% endif %}
     </td></tr>
   </table>

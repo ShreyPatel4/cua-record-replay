@@ -23,7 +23,38 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   `PERMISSION_DENIED` for a restricted member. `permission_denied` injection takes `on=create`
   (default) or `on=detail` to force it on any member.
 - Injections are armed with an optional use count (`times`, None means until cleared) and string
-  params. `session_expired` defaults to one use. `slow` takes `ms` (default 5000).
+  params, all validated at arm time (bad input is a 400, never a 500 or a silent no-op).
+  `session_expired` defaults to one use. `slow` takes `ms` (default 5000, inside the kickoff's
+  4 to 8 s band). Because the default checkpoint timeout is 10 s, the member-detail step must carry
+  a shorter per-step checkpoint timeout (3 s) so `slow` actually trips `checkpoint_timeout` and the
+  `wait_retry` recovery (budget 15 s) is exercised rather than silently absorbed.
+- `layout_drift` inserts a status cell and renames Find to Search in the same row. Text rungs and
+  the bbox rung break; a same-row anchor rung (right of the textbox) survives. Exactly one rung
+  degrades, so the drift signal is meaningful. The search form has `onsubmit="return false"` so
+  pressing Enter cannot bypass the drifted control.
+- `interstitial` hides the member card (`visibility:hidden`) until OK, so an extraction that ignores
+  the notice fails instead of passing for the wrong reason. `sticky=1` never reveals it.
+- Login `next` drops `inject*` params (no redirect loop) and only accepts same-origin paths.
+- `CORELEDGER_ALLOW_QUERY_INJECTION=0` disables `?inject=`. `/__control` is unauthenticated on
+  purpose (local mock only); the policy denies it to the agent.
+
+## Open items the phase 1 contracts must settle (from the phase 0 review)
+
+- Action enum needs `select_option(ref, label)`: the sub-account form uses a `<select>`, which
+  `type_text` cannot drive.
+- `confirm()` must be modelled explicitly. Playwright auto-dismisses unhandled dialogs, so the
+  irreversible click silently does nothing. Frame dialogs reach `page.on("dialog")`. Options: a step
+  field `dialog: accept | dismiss` classed irreversible, plus a surface-level handler that fails the
+  step loudly on any unexpected dialog.
+- `url_matches` detectors need a frame scope. In the frameset `page.url` stays `/` while the `main`
+  frame moves to `/login?...`; detectors evaluate the frame URL named by `frame_path`.
+- Policy draft vs routes: the shell loads `/banner`, so either allow it or gate only agent-initiated
+  top-level navigations. Irreversibility cannot key on `/subaccounts/create` (that is the POST
+  target, reached only after the act); key it on the form page plus the accepted dialog.
+- Perception source: `page.locator(":root").aria_snapshot(mode="ai")` on Playwright 1.62 walks both
+  frames with frame-prefixed refs (`f2e14`) and supports `boxes=True`. Evaluate it as the ref
+  source before building a custom numbering and DOM walk. Unverified: whether `aria-ref=` locators
+  resolve inside frames.
 - Login page has real wrapped `<label>`s and an `<input type=submit>` ("a later vendor patch").
   Search, detail, and sub-account pages keep role-less spans and tds. Realistic legacy apps are
   inconsistent, and it gives the ladder a real spread of rungs.
@@ -103,7 +134,7 @@ Hybrid, and this is a deliberate stance on the "no clean DOM" requirement. Each 
 
 The model targets by ref. The recorder converts the ref into a locator ladder at record time. This is the same mental model as screenshot-plus-coordinates but with a stable handle, and it is the model that transfers to desktop: OS accessibility APIs expose the same role/name/bounds triple.
 
-Phase 0 note: the mock app's span and td controls have no ARIA role and do not appear in Playwright's aria snapshot at all (pinned by `tests/test_mock_app_browser.py`). The DOM walk is a first-class perception path, not a fallback, and `role_name` is unavailable for most controls outside the login page.
+Phase 0 note (verified on Playwright 1.62): the mock app's span and td controls do appear in the aria snapshot, but only as table cells (`cell "Find"`, `cell "OK"`), never as buttons, and the search textbox has no accessible name. So `role_name` cannot tell interactive cells from data cells, and the recorder leans on `label_text`, `text_exact`, and `anchor_relative` outside the login page. Pinned by `tests/test_mock_app_browser.py`. `page.accessibility` no longer exists in 1.62.
 
 ### 2.4 Target application
 
@@ -351,7 +382,7 @@ Printed to stdout with the exact resume command.
 
 `evidence/README.md` at the top level lists every committed run, what it demonstrates, and the command that produced it.
 
-Phase 0 note: Playwright trace zips record network bodies, including the sign-in POST. The leak scan in `tests/test_leaks.py` opens zip members for that reason; the trace writer in phase 4 must keep credentials out of them.
+Phase 0 note: Playwright trace zips record network bodies, including the sign-in POST, where the password is stored form-encoded in `resources/*.dat`. The leak scan in `tests/test_leaks.py` opens zip members and matches raw, URL-encoded, JSON-escaped, and base64 forms for that reason; the trace writer in phase 4 must keep credentials out of them (for example by excluding the sign-in step from tracing or stripping network resources).
 
 ## 6. REPORT.md guidance
 

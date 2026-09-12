@@ -1,10 +1,11 @@
 """Deterministic failure injection: named faults armed via /__control or a one-shot ?inject= param.
 
-Each armed fault has an optional remaining count (None means until cleared) and string params.
+Every fault, count, site, and param is validated at arm time, so a typo fails loudly, not silently.
 """
 
 from __future__ import annotations
 
+import enum
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -22,28 +23,44 @@ InjectionName = Literal[
 ]
 INJECTION_NAMES: tuple[str, ...] = get_args(InjectionName)
 
-# Default slow delay sits inside the 4 to 8 s band so it outlasts a naive 3 s wait but fits a
-# 15 s recovery budget. Tests override it with params={"ms": "..."} to stay fast.
+# Inside the kickoff's 4 to 8 s band. It only outlasts a checkpoint whose per-step timeout is
+# shorter than this, which is how the member-detail step exercises wait_and_retry (see CLAUDE.md).
 DEFAULT_SLOW_MS = 5000
+MAX_SLOW_MS = 60_000
 
 DESCRIPTIONS: dict[str, str] = {
     "not_found": "Member search returns 'No member found' for any number.",
     "validation_error": "Sub-account create rejects the initial deposit regardless of value.",
-    "interstitial": "Member detail opens with a 'System notice' modal. params: sticky=1 keeps it.",
+    "interstitial": "Member detail hides behind a 'System notice' until OK. params: sticky=1.",
     "slow": f"Member detail responds after ms milliseconds (default {DEFAULT_SLOW_MS}).",
     "session_expired": "Member detail kills the session and redirects to sign-in. Fires once.",
     "permission_denied": "Returns an 'Access denied' 403. params: on=create (default) or detail.",
     "app_error": "Returns an 'Internal Server Error' 500. params: on=detail|search|create.",
-    "layout_drift": "Search page relabels 'Find' to 'Search' and moves it to another cell.",
+    "layout_drift": "Search page relabels 'Find' to 'Search' and moves it one cell right.",
 }
 
-# session_expired defaults to one shot so the "recover once" path is the default behaviour;
-# arm it with times=None to exercise "recurs, so hard failure".
+# Faults that can fire at more than one route take an `on` param naming the site.
+SITES: dict[str, tuple[str, ...]] = {
+    "permission_denied": ("create", "detail"),
+    "app_error": ("detail", "search", "create"),
+}
+
+# session_expired defaults to one shot so "recover once" is the default behaviour; arm it with
+# times=None to exercise "recurs, so hard failure".
 DEFAULT_TIMES: dict[str, int | None] = {"session_expired": 1}
 
 
-class UnknownInjectionError(ValueError):
-    pass
+class Default(enum.Enum):
+    """Typed sentinel for 'use the per-injection default count'."""
+
+    TIMES = "default"
+
+
+DEFAULT = Default.TIMES
+
+
+class InjectionError(ValueError):
+    """Bad injection name, count, site, or param. The control surfaces map this to HTTP 400."""
 
 
 @dataclass
@@ -52,33 +69,65 @@ class ArmedInjection:
     remaining: int | None
     params: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def site(self) -> str | None:
+        sites = SITES.get(self.name)
+        return None if sites is None else self.params.get("on", sites[0])
+
+
+def validate_name(name: str) -> str:
+    if name not in INJECTION_NAMES:
+        raise InjectionError(f"unknown injection {name!r}; known: {', '.join(INJECTION_NAMES)}")
+    return name
+
+
+def validate_params(name: str, params: Mapping[str, str]) -> dict[str, str]:
+    validate_name(name)
+    allowed = {"slow": {"ms"}, "interstitial": {"sticky"}}.get(name, set())
+    if name in SITES:
+        allowed = {"on"}
+    unknown = set(params) - allowed
+    if unknown:
+        raise InjectionError(f"{name} does not take params {sorted(unknown)}")
+    clean = {k: str(v) for k, v in params.items()}
+    if "on" in clean and clean["on"] not in SITES[name]:
+        raise InjectionError(f"{name} on= must be one of {SITES[name]}, got {clean['on']!r}")
+    if "ms" in clean and not (clean["ms"].isdigit() and 0 <= int(clean["ms"]) <= MAX_SLOW_MS):
+        raise InjectionError(f"slow ms= must be an integer 0..{MAX_SLOW_MS}, got {clean['ms']!r}")
+    if "sticky" in clean and clean["sticky"] not in ("0", "1"):
+        raise InjectionError(f"interstitial sticky= must be 0 or 1, got {clean['sticky']!r}")
+    return clean
+
+
+def validate_times(name: str, times: object) -> int | None:
+    if times is DEFAULT:
+        return DEFAULT_TIMES.get(name)
+    if times is None:
+        return None
+    if isinstance(times, bool) or not isinstance(times, int) or times < 1:
+        raise InjectionError(f"times must be a positive integer or null, got {times!r}")
+    return times
+
 
 @dataclass
 class InjectionState:
     _armed: dict[str, ArmedInjection] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    @staticmethod
-    def validate(name: str) -> str:
-        if name not in INJECTION_NAMES:
-            raise UnknownInjectionError(f"unknown injection {name!r}; known: {INJECTION_NAMES}")
-        return name
-
     def arm(
-        self, name: str, times: int | None = -1, params: dict[str, str] | None = None
+        self,
+        name: str,
+        times: int | Default | None = DEFAULT,
+        params: Mapping[str, str] | None = None,
     ) -> ArmedInjection:
-        """Arm a fault. times=-1 means use the per-injection default."""
-        self.validate(name)
-        remaining = DEFAULT_TIMES.get(name) if times == -1 else times
-        if remaining is not None and remaining < 1:
-            raise ValueError("times must be a positive integer or None")
-        armed = ArmedInjection(name=name, remaining=remaining, params=dict(params or {}))
+        clean = validate_params(name, params or {})
+        armed = ArmedInjection(name, validate_times(name, times), clean)
         with self._lock:
             self._armed[name] = armed
         return armed
 
     def clear(self, name: str) -> None:
-        self.validate(name)
+        validate_name(name)
         with self._lock:
             self._armed.pop(name, None)
 
@@ -98,25 +147,20 @@ class InjectionState:
         name: str,
         *,
         at: str | None = None,
-        default_at: str | None = None,
-        one_shot: Mapping[str, dict[str, str]] | None = None,
+        one_shot: Mapping[str, ArmedInjection] | None = None,
     ) -> ArmedInjection | None:
         """Return the fault if it applies at this site, consuming one use of a counted fault.
 
-        Faults with an `on` param only fire where on == at, and are not consumed elsewhere.
-        `one_shot` carries faults requested by ?inject= on this request; they never touch state.
+        A sited fault only fires (and is only consumed) where its site equals `at`.
+        `one_shot` holds faults requested by ?inject= on this request; they never touch state.
         """
-        self.validate(name)
-
-        def applies(params: Mapping[str, str]) -> bool:
-            return at is None or params.get("on", default_at) == at
-
+        validate_name(name)
         if one_shot is not None and name in one_shot:
-            params = one_shot[name]
-            return ArmedInjection(name, 0, dict(params)) if applies(params) else None
+            requested = one_shot[name]
+            return requested if at is None or requested.site == at else None
         with self._lock:
             armed = self._armed.get(name)
-            if armed is None or not applies(armed.params):
+            if armed is None or (at is not None and armed.site != at):
                 return None
             if armed.remaining is not None:
                 armed.remaining -= 1

@@ -1,18 +1,24 @@
-"""Enumerate the files that are committed or could be committed, plus artifacts and evidence.
+"""Test support: the committable-file enumeration and shared fixture types.
 
-Shared by the leak scan and the repo hygiene rules so both look at exactly the same set.
+Imported by tests directly, so nothing needs to import conftest as a module.
 """
 
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 _WALK_SKIP = {".git", ".venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "__pycache__"}
+_UNCOMMITTED = {"_scratch"}
+
+# inject("slow", ms="300") arms a fault; times=None keeps it until reset, omit it for the default.
+Injector = Callable[..., None]
 
 
 def candidate_files() -> list[Path]:
+    """Files git would commit, plus everything under artifacts/ and evidence/ except scratch."""
     try:
         out = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],  # noqa: S607
@@ -24,5 +30,9 @@ def candidate_files() -> list[Path]:
     except (FileNotFoundError, subprocess.CalledProcessError):
         files = {p for p in ROOT.rglob("*") if not (_WALK_SKIP & set(p.relative_to(ROOT).parts))}
     for tracked_dir in ("artifacts", "evidence"):
-        files |= set((ROOT / tracked_dir).rglob("*"))
+        files |= {
+            p
+            for p in (ROOT / tracked_dir).rglob("*")
+            if not (_UNCOMMITTED & set(p.relative_to(ROOT).parts))
+        }
     return sorted(p for p in files if p.is_file())

@@ -1,16 +1,18 @@
 """Repo hygiene rules that are cheap to enforce mechanically rather than by review.
 
-No em dashes in human-readable files; no stable selector attributes in the hostile mock markup.
+No em dashes in authored text (recorded evidence is exempt); no stable selectors in mock markup.
 """
 
 from __future__ import annotations
 
 import re
 
-from repo_files import ROOT, candidate_files
+from support import ROOT, candidate_files
 
 TEXT_SUFFIXES = {".md", ".py", ".html", ".yaml", ".yml", ".toml", ".json", ".txt", ".cfg"}
 EM_DASH = "\u2014"
+# Evidence and artifacts are recorded output; rewriting them to satisfy a style rule is tampering.
+RECORDED_DIRS = {"evidence", "artifacts"}
 
 
 def test_no_em_dashes_in_human_readable_files() -> None:
@@ -18,6 +20,7 @@ def test_no_em_dashes_in_human_readable_files() -> None:
         str(p.relative_to(ROOT))
         for p in candidate_files()
         if (p.suffix in TEXT_SUFFIXES or p.name == ".env.example")
+        and not (RECORDED_DIRS & set(p.relative_to(ROOT).parts[:1]))
         and EM_DASH in p.read_text(encoding="utf-8", errors="replace")
     ]
     assert not offenders, f"em dashes found in: {offenders}"

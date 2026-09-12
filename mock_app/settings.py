@@ -56,4 +56,5 @@ class MockSettings:
             operator_password=password,
             session_ttl_s=int(os.environ.get("CORELEDGER_SESSION_TTL_S", DEFAULT_SESSION_TTL_S)),
             port=int(os.environ.get("CORELEDGER_PORT", DEFAULT_PORT)),
+            allow_query_injection=os.environ.get("CORELEDGER_ALLOW_QUERY_INJECTION", "1") == "1",
         )

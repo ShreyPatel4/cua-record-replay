@@ -14,7 +14,8 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import parse_qs, urlsplit
 
 HOSTILE_MARKUP = re.compile(r"""\s(id|data-testid|data-test|data-qa)\s*=""", re.IGNORECASE)
 
@@ -59,7 +60,10 @@ class Client:
     def login(self, user: str, password: str) -> Page:
         return self.request("/login", form={"operator": user, "password": password, "next": ""})
 
-    def arm(self, name: str, times: int | str | None = "default", **params: str) -> None:
+    def arm(
+        self, name: str, times: int | Literal["default"] | None = "default", **params: str
+    ) -> None:
+        """Omitting times on the wire means the per-injection default."""
         body: dict[str, Any] = {"name": name, "params": params}
         if times != "default":
             body["times"] = times
@@ -160,9 +164,10 @@ def check_interstitial(c: Client, user: str, password: str) -> None:
     c.arm("interstitial", times=1)
     first = c.request("/members/10007")
     _expect_in("System notice", first, "interstitial")
-    _expect_in("Member profile", first, "interstitial renders over the real page")
+    _expect_in('class="card" style="visibility:hidden"', first, "card hidden until OK")
     second = c.request("/members/10007")
     _expect("System notice" not in second.body, "times=1 interstitial fires once")
+    _expect("visibility:hidden" not in second.body, "card visible without interstitial")
 
 
 def check_slow(c: Client, user: str, password: str) -> None:
@@ -227,6 +232,11 @@ def check_layout_drift(c: Client, user: str, password: str) -> None:
     after = c.request("/members/search")
     _expect(">Search</span>" in after.body, "drifted search has Search")
     _expect(">Find</span>" not in after.body, "drifted search no longer has Find")
+    same_row = re.search(
+        r'name="q"[^>]*></td>\s*<td[^>]*>&nbsp;</td>\s*<td><span[^>]*>Search</span>', after.body
+    )
+    _expect(same_row is not None, "drifted action is one cell right, in the textbox row")
+    _expect_in('onsubmit="return false"', after, "span click is the only submit")
     _expect_hostile(after)
 
 
@@ -241,6 +251,46 @@ def check_query_param_injection(c: Client, user: str, password: str) -> None:
     _expect(state["armed"] == {}, f"?inject must not mutate armed state: {state}")
     unknown = c.request("/members/10007?inject=bogus")
     _expect(unknown.status == 400, f"unknown injection is 400, got {unknown.status}")
+    kicked = c.request("/members/10007?inject=session_expired")
+    next_param = parse_qs(urlsplit(kicked.url).query).get("next", [""])[0]
+    _expect(next_param == "/members/10007", f"next must drop ?inject to avoid a loop: {next_param}")
+
+
+def check_control_validation(c: Client, user: str, password: str) -> None:
+    bad_bodies: list[dict[str, Any]] = [
+        {"name": "bogus"},
+        {"name": "slow", "times": 0},
+        {"name": "slow", "times": 1.5},
+        {"name": "slow", "params": {"ms": "abc"}},
+        {"name": "permission_denied", "params": {"on": "bogus"}},
+        {"name": "not_found", "params": {"ms": "10"}},
+    ]
+    for body in bad_bodies:
+        page = c.request("/__control/api/arm", json_body=body)
+        _expect(page.status == 400, f"arm {body} should be 400, got {page.status}")
+    form = c.request("/__control", form={"action": "arm", "name": "slow", "times": "abc"})
+    _expect(form.status == 400, f"control form with times=abc should be 400, got {form.status}")
+    c.login(user, password)
+    bad_query = c.request("/members/10007?inject=slow&inject_ms=abc")
+    _expect(bad_query.status == 400, f"bad one-shot param should be 400, got {bad_query.status}")
+    state = json.loads(c.request("/__control/api/state").body)
+    _expect(state["armed"] == {}, f"rejected requests must arm nothing: {state}")
+
+
+HOSTILE_NEXT = ("//evil.example/x", "/\t/evil.example/y", "/\\evil.example", "https://evil.example")
+
+
+def check_redirect_safety(c: Client, user: str, password: str) -> None:
+    for hostile in HOSTILE_NEXT:
+        form = {"operator": user, "password": password, "next": hostile}
+        landed = c.request("/login", form=form)
+        _expect(
+            landed.url == c.base_url + "/members/search",
+            f"next={hostile!r} must fall back to search, landed on {landed.url}",
+        )
+    form = {"operator": user, "password": password, "next": "/members/10007"}
+    ok = c.request("/login", form=form)
+    _expect(ok.url.endswith("/members/10007"), f"same-origin next is honoured, got {ok.url}")
 
 
 CHECKS: dict[str, Callable[[Client, str, str], None]] = {
@@ -256,6 +306,8 @@ CHECKS: dict[str, Callable[[Client, str, str], None]] = {
     "app_error": check_app_error,
     "layout_drift": check_layout_drift,
     "query_param_injection": check_query_param_injection,
+    "control_validation": check_control_validation,
+    "redirect_safety": check_redirect_safety,
 }
 
 
