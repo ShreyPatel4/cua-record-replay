@@ -1,11 +1,11 @@
 """Semver rules for capabilities: classify a change and check the version bump covers it.
 
-Major: the caller-facing contract broke. Minor: the flow changed. Patch: only wording changed.
+Major: a caller or deployment contract broke. Minor: the flow or an additive contract changed.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from cua.artifact.schema import Capability
 
@@ -14,6 +14,17 @@ _ORDER: dict[Bump, int] = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 _WORDING_KEYS = frozenset({"description", "notes", "review_notes"})
 _VOLATILE_META = frozenset(
     {"version", "status", "approved_by", "approved_at", "created_at", "created_from_run_id"}
+)
+_FLOW_KEYS = (
+    "surface",
+    "secrets",
+    "inputs",
+    "outputs",
+    "steps",
+    "checkpoints",
+    "outcome_detectors",
+    "success",
+    "tenant_overrides",
 )
 
 
@@ -45,55 +56,68 @@ def _strip_wording(value: object) -> object:
     return value
 
 
-def required_bump(old: Capability, new: Capability) -> Bump:
-    if old.capability.id != new.capability.id:
-        raise VersionError(f"different capabilities: {old.capability.id} vs {new.capability.id}")
-
+def contract_breaks(old: Capability, new: Capability) -> list[str]:
+    """Changes a calling agent or a deployment would notice. Any one of them needs a major bump."""
+    breaks: list[str] = []
     old_inputs = {p.name: p for p in old.inputs}
     new_inputs = {p.name: p for p in new.inputs}
     for name, before in old_inputs.items():
         after = new_inputs.get(name)
         if after is None:
-            return "major"
-        shape = ("type", "pattern", "enum_values", "sensitive")
-        if any(getattr(before, f) != getattr(after, f) for f in shape):
-            return "major"
+            breaks.append(f"input {name} removed")
+            continue
+        for field in ("type", "pattern", "enum_values", "sensitive"):
+            if getattr(before, field) != getattr(after, field):
+                breaks.append(f"input {name} {field} changed")
         if after.required and not before.required:
-            return "major"
-    if any(p.required for n, p in new_inputs.items() if n not in old_inputs):
+            breaks.append(f"input {name} became required")
+    breaks += [
+        f"new required input {n}"
+        for n, p in new_inputs.items()
+        if p.required and n not in old_inputs
+    ]
+
+    new_outputs = {o.name: o for o in new.outputs}
+    for output in old.outputs:
+        after_output = new_outputs.get(output.name)
+        if after_output is None:
+            breaks.append(f"output {output.name} removed")
+        elif (output.type, output.sensitive) != (after_output.type, after_output.sensitive):
+            breaks.append(f"output {output.name} type or sensitivity changed")
+
+    new_codes = new.outcome_codes
+    for code, kind in old.outcome_codes.items():
+        if new_codes.get(code) != kind:
+            breaks.append(f"outcome {code} removed or reclassified")
+
+    def secret_shape(c: Capability) -> dict[str, tuple[str, str]]:
+        return {s.name: (s.kind, s.env_var) for s in c.secrets}
+
+    if secret_shape(old) != secret_shape(new):
+        breaks.append("secrets or their environment variables changed")
+    if old.surface.kind != new.surface.kind:
+        breaks.append("surface kind changed")
+    if old.capability.policy_ref != new.capability.policy_ref:
+        breaks.append("policy_ref changed")
+    return breaks
+
+
+def _comparable(capability: Capability) -> dict[str, Any]:
+    dump = capability.model_dump(mode="json")
+    for volatile in _VOLATILE_META:
+        dump["capability"].pop(volatile, None)
+    return dump
+
+
+def required_bump(old: Capability, new: Capability) -> Bump:
+    if old.capability.id != new.capability.id:
+        raise VersionError(f"different capabilities: {old.capability.id} vs {new.capability.id}")
+    if contract_breaks(old, new):
         return "major"
 
-    old_outputs = {o.name: o.type for o in old.outputs}
-    new_outputs = {o.name: o.type for o in new.outputs}
-    if any(new_outputs.get(name) != kind for name, kind in old_outputs.items()):
-        return "major"
-
-    if set(new_inputs) != set(old_inputs) or set(new_outputs) != set(old_outputs):
+    old_dump, new_dump = _comparable(old), _comparable(new)
+    if any(_strip_wording(old_dump[k]) != _strip_wording(new_dump[k]) for k in _FLOW_KEYS):
         return "minor"
-    if any(new_inputs[n].required != old_inputs[n].required for n in old_inputs):
-        return "minor"
-
-    old_dump = old.model_dump(mode="json")
-    new_dump = new.model_dump(mode="json")
-    for key in ("capability",):
-        for volatile in _VOLATILE_META:
-            old_dump[key].pop(volatile, None)
-            new_dump[key].pop(volatile, None)
-    if _strip_wording(old_dump) != _strip_wording(new_dump):
-        flow_keys = (
-            "surface",
-            "secrets",
-            "steps",
-            "checkpoints",
-            "outcome_detectors",
-            "success",
-            "tenant_overrides",
-            "outputs",
-            "inputs",
-        )
-        if any(_strip_wording(old_dump[k]) != _strip_wording(new_dump[k]) for k in flow_keys):
-            return "minor"
-        return "patch"
     return "patch" if old_dump != new_dump else "none"
 
 
@@ -102,8 +126,10 @@ def check_version(old: Capability, new: Capability) -> Bump:
     required = required_bump(old, new)
     actual = actual_bump(old.capability.version, new.capability.version)
     if _ORDER[actual] < _ORDER[required]:
+        detail = "; ".join(contract_breaks(old, new)) if required == "major" else ""
         raise VersionError(
             f"{new.capability.id}: this change needs a {required} bump, but "
             f"{old.capability.version} -> {new.capability.version} is {actual}"
+            + (f" ({detail})" if detail else "")
         )
     return required

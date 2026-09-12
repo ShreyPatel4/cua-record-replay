@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from cua.artifact.catalog import load_capability
+from cua.artifact.catalog import CatalogError, dump_json, load_capability
 from cua.artifact.overrides import OverrideError, resolve_for_tenant
 from cua.artifact.schema import Capability, ClickStep, TextExactRung, TextPresent, WebSurface
 
@@ -106,5 +106,71 @@ def test_an_override_that_breaks_the_artifact_fails_at_load(tmp_path: Any) -> No
         resolve_for_tenant(broken, "harbor-fcu")
     path = tmp_path / "broken.capability.json"
     path.write_text(broken.model_dump_json(), encoding="utf-8")
-    with pytest.raises(OverrideError):
+    with pytest.raises(CatalogError, match="harbor-fcu"):
         load_capability(path)
+
+
+def test_a_dialog_step_with_a_tenant_override_round_trips() -> None:
+    """The example has no dialog, so this pins an irreversible click and its tenant patch."""
+    data: dict[str, Any] = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["steps"].append(
+        {
+            "id": "s07",
+            "action": "click",
+            "description": "Close the member record, which asks for confirmation.",
+            "target": {
+                "ladder": [{"strategy": "text_exact", "text": "Close record", "confidence": 0.9}],
+                "recorded_rung": 0,
+                "frame_path": ["main"],
+                "fingerprint": {"role": "cell", "name": "Close record", "text": "Close record"},
+                "notes": "A td with an onclick handler.",
+            },
+            "dialog": {
+                "dialog_type": "confirm",
+                "message_pattern": "cannot be undone",
+                "response": "accept",
+            },
+            "risk": "irreversible",
+            "wait_for": {"kind": "checkpoint", "checkpoint": "cp_search_ready"},
+        }
+    )
+    data["tenant_overrides"] = {
+        "harbor-fcu": {
+            "description": "Build 4.2.2 renamed the action.",
+            "steps": {"s07": {"target": {"ladder": [SEARCH_LADDER[0] | {"text": "Close"}]}}},
+        }
+    }
+    capability = Capability.model_validate(data)
+    assert Capability.model_validate_json(dump_json(capability)) == capability
+    step = next(s for s in resolve_for_tenant(capability, "harbor-fcu").steps if s.id == "s07")
+    assert isinstance(step, ClickStep)
+    assert step.dialog is not None
+    assert (step.dialog.response, step.risk) == ("accept", "irreversible")
+    assert isinstance(step.target.ladder[0], TextExactRung)
+    assert step.target.ladder[0].text == "Close"
+
+
+def test_a_tenant_cannot_make_a_credential_field_look_ordinary() -> None:
+    data: dict[str, Any] = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["inputs"].append(
+        {
+            "name": "pin",
+            "type": "string",
+            "description": "PIN.",
+            "required": True,
+            "sensitive": True,
+        }
+    )
+    step = next(s for s in data["steps"] if s["id"] == "s05")
+    step["value"] = "{{inputs.pin}}"
+    step["target"]["ladder"][0]["label"] = "PIN"
+    step["target"]["fingerprint"]["name"] = "PIN"
+    code_ladder = [dict(step["target"]["ladder"][0], label="Code")]
+    data["tenant_overrides"] = {
+        "harbor-fcu": {
+            "description": "Relabelled PIN field.",
+            "steps": {"s05": {"target": {"ladder": code_ladder, "fingerprint": {"name": None}}}},
+        }
+    }
+    with pytest.raises(OverrideError, match=r"look ordinary: \['s05'\]"):
+        resolve_for_tenant(Capability.model_validate(data), "harbor-fcu")

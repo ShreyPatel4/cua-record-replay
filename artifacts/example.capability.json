@@ -18,11 +18,13 @@
   "secrets": [
     {
       "name": "operator_id",
+      "kind": "identity",
       "env_var": "CORELEDGER_OPERATOR_USER",
-      "description": "Operator sign-in id. A credential, so it never lives in the artifact."
+      "description": "Operator sign-in id. Not a password, but it identifies who acted, so it lives outside the artifact and is redacted as a whole token."
     },
     {
       "name": "operator_password",
+      "kind": "credential",
       "env_var": "CORELEDGER_OPERATOR_PASSWORD",
       "description": "Operator sign-in password."
     }
@@ -149,9 +151,10 @@
         ],
         "fingerprint": {
           "role": "textbox",
-          "name": "Password"
+          "name": "Password",
+          "input_type": "password"
         },
-        "notes": "Same labelled sign-in form. Because the name matches a credential pattern, the schema only accepts a secrets template here."
+        "notes": "Same labelled sign-in form. The password input type marks this a credential field however a tenant relabels it, so the schema only accepts a credential secret here and never records the field's text."
       },
       "value": "{{secrets.operator_password}}",
       "clear_first": true,
@@ -353,13 +356,20 @@
       }
     },
     "cp_member_loaded": {
-      "description": "The member profile is visible and its savings value can be read. A hidden card (for example behind a system notice) does not count.",
+      "description": "The profile of the requested member is visible and its savings value can be read. The member number check stops a stale profile from counting; a hidden card (for example behind a system notice) does not count either.",
       "condition": {
         "kind": "all",
         "conditions": [
           {
             "kind": "text_present",
             "text": "Member profile",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.member_id}}",
             "frame_path": [
               "main"
             ]
@@ -395,7 +405,7 @@
   "outcome_detectors": [
     {
       "id": "od_session_expired",
-      "description": "CoreLedger ended the session mid-flow and bounced the main frame to sign-in.",
+      "description": "CoreLedger ended the session and bounced the main frame to sign-in. Only the member page checks the session mid-flow, so the detector is scoped to s06. Signing in again redirects back to the member page, which is why run_steps re-verifies s06's checkpoint instead of s04's.",
       "when": {
         "kind": "all",
         "conditions": [
@@ -415,6 +425,9 @@
           }
         ]
       },
+      "scope": [
+        "s06"
+      ],
       "outcome": {
         "type": "recoverable",
         "code": "SESSION_EXPIRED",
@@ -426,7 +439,8 @@
             "s04"
           ],
           "max_attempts": 1
-        }
+        },
+        "on_exhausted": "hard_failure"
       }
     },
     {
@@ -527,7 +541,7 @@
     },
     {
       "id": "od_system_notice",
-      "description": "A maintenance notice covers the profile until acknowledged.",
+      "description": "A maintenance notice covers the profile until acknowledged. If OK never clears it, a human can.",
       "when": {
         "kind": "element_present",
         "target": {
@@ -596,7 +610,8 @@
             "notes": "Same control as the trigger."
           },
           "max_attempts": 2
-        }
+        },
+        "on_exhausted": "escalate"
       }
     },
     {
@@ -616,7 +631,8 @@
           "kind": "wait_retry",
           "max_total_ms": 15000,
           "poll_ms": 500
-        }
+        },
+        "on_exhausted": "hard_failure"
       }
     }
   ],
@@ -629,6 +645,6 @@
   "tenant_overrides": {},
   "provenance": {
     "recorded_by": "human",
-    "review_notes": "Hand-written in phase 1 as the target shape for sign-off. Discovery must produce an equivalent artifact from a real run. The two bbox rungs were measured with a Playwright probe at 1280x800."
+    "review_notes": "Hand-written in phase 1 as the target shape for sign-off, then revised after the phase 1 review. Discovery must produce an equivalent artifact from a real run. The two bbox rungs were measured with a Playwright probe at 1280x800."
   }
 }

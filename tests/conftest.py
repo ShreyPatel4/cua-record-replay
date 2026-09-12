@@ -21,7 +21,7 @@ from support import Injector
 
 @pytest.fixture(scope="session")
 def mock_settings() -> MockSettings:
-    return MockSettings(operator_user="operator", operator_password=secrets.token_urlsafe(18))
+    return MockSettings(operator_user="teller-0417", operator_password=secrets.token_urlsafe(18))
 
 
 @pytest.fixture(scope="session")

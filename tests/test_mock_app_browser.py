@@ -134,6 +134,31 @@ def test_layout_drift_moves_the_action_one_cell_right_in_the_same_row(
     assert search_box["x"] > textbox["x"] + textbox["width"], "still right of the textbox"
 
 
+def test_signing_in_again_after_expiry_lands_on_the_expired_page_not_search(
+    page: Page, coreledger: RunningMockApp, mock_settings: MockSettings, inject: Injector
+) -> None:
+    """Pins od_session_expired's run_steps recovery: re-running s02-s04 returns to the member.
+
+    The post-login redirect honours next=, so the sign-in step's own wait (cp_search_ready) never
+    holds during recovery. That is why a run_steps recovery replaces the last re-run step's wait
+    with the interrupted checkpoint instead of honouring it.
+    """
+    main = _sign_in(page, coreledger.base_url, mock_settings)
+    inject("session_expired")
+    main.get_by_role("textbox").fill("10007")
+    main.get_by_text("Find", exact=True).click()
+    expect(main.get_by_text("Your session has expired")).to_be_visible()
+    assert re.search(r"/login\?", main.url)
+
+    main.get_by_label("Operator ID").fill(mock_settings.operator_user)
+    main.get_by_label("Password").fill(mock_settings.operator_password)
+    main.get_by_role("button", name="Sign in").click()
+    expect(main.get_by_text("Member profile")).to_be_visible()
+    expect(_savings_cell(main)).to_have_text("$4,210.55")
+    expect(main.get_by_text("Member Lookup")).to_have_count(0)
+    assert main.url.endswith("/members/10007")
+
+
 def test_enter_in_the_search_box_does_not_submit(
     page: Page, coreledger: RunningMockApp, mock_settings: MockSettings
 ) -> None:

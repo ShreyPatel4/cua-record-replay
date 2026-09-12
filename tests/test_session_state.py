@@ -22,47 +22,54 @@ from cua.session.state import (
     require_automation,
 )
 
+OP = "op-shrey"
+
 
 def _paused() -> SessionState:
     return advance(
-        SessionState.start("replay_1", "replay"),
+        SessionState.start("replay_1", "replay", owner_pid=4242),
         "stuck_detected",
         "automation",
         intervention_id="int_1",
     )
 
 
+def _held() -> SessionState:
+    return advance(_paused(), "take_control", "operator", operator_id=OP)
+
+
 def test_full_handoff_cycle() -> None:
     state = _paused()
-    assert (state.phase, state.controller, state.intervention_id) == (
+    assert (state.phase, state.controller, state.intervention_id, state.owner_pid) == (
         "paused_for_human",
         "nobody",
         "int_1",
+        4242,
     )
-    state = advance(state, "take_control", "operator")
-    assert (state.phase, state.controller) == ("human_active", "human")
-    state = advance(state, "hand_back", "operator", note="cleared app_error, reopened member")
+    state = advance(state, "take_control", "operator", operator_id=OP)
+    assert (state.phase, state.controller, state.operator_id) == ("human_active", "human", OP)
+    state = advance(state, "hand_back", "operator", operator_id=OP, note="cleared app_error")
     assert (state.phase, state.controller, state.intervention_id) == (
         "resuming",
         "automation",
         "int_1",
     )
     state = advance(state, "checkpoint_reverified", "automation")
-    assert (state.phase, state.controller, state.intervention_id) == ("running", "automation", None)
+    assert (state.phase, state.intervention_id, state.operator_id) == ("running", None, None)
     state = advance(state, "finish", "automation")
     assert state.phase == "finished"
     assert state.version == 5
-    assert [h.event for h in state.history] == [
-        "stuck_detected",
-        "take_control",
-        "hand_back",
-        "checkpoint_reverified",
-        "finish",
+    assert [(h.event, h.operator_id) for h in state.history] == [
+        ("stuck_detected", None),
+        ("take_control", OP),
+        ("hand_back", OP),
+        ("checkpoint_reverified", None),
+        ("finish", None),
     ]
 
 
 def test_failed_reverification_pauses_again() -> None:
-    state = advance(advance(_paused(), "take_control", "operator"), "hand_back", "operator")
+    state = advance(_held(), "hand_back", "operator", operator_id=OP)
     state = advance(state, "reverify_failed", "automation", intervention_id="int_2")
     assert (state.phase, state.controller, state.intervention_id) == (
         "paused_for_human",
@@ -81,13 +88,42 @@ def test_failed_reverification_pauses_again() -> None:
 )
 def test_illegal_transitions_from_running(event: str, actor: str, match: str) -> None:
     with pytest.raises(IllegalTransition, match=match):
-        advance(SessionState.start("r", "replay"), event, actor, intervention_id="int")  # type: ignore[arg-type]
+        advance(
+            SessionState.start("r", "replay"),
+            event,  # type: ignore[arg-type]
+            actor,  # type: ignore[arg-type]
+            intervention_id="int",
+            operator_id=OP,
+        )
 
 
 def test_operator_cannot_skip_reverification() -> None:
-    state = advance(advance(_paused(), "take_control", "operator"), "hand_back", "operator")
+    state = advance(_held(), "hand_back", "operator", operator_id=OP)
     with pytest.raises(IllegalTransition, match="may not fire"):
-        advance(state, "checkpoint_reverified", "operator")
+        advance(state, "checkpoint_reverified", "operator", operator_id=OP)
+
+
+def test_operator_events_must_name_the_operator() -> None:
+    with pytest.raises(IllegalTransition, match="need an operator_id"):
+        advance(_paused(), "take_control", "operator")
+
+
+def test_only_the_operator_holding_control_can_hand_back_or_abort() -> None:
+    for event in ("hand_back", "abort"):
+        with pytest.raises(NotInControl, match="does not hold run replay_1"):
+            advance(_held(), event, "operator", operator_id="op-someone-else")  # type: ignore[arg-type]
+
+
+def test_abort_and_expiry_keep_the_intervention_for_the_result() -> None:
+    aborted = advance(_held(), "abort", "operator", operator_id=OP)
+    expired = advance(_held(), "expire", "system")
+    for state in (aborted, expired):
+        assert (state.phase, state.intervention_id) == ("finished", "int_1")
+
+
+def test_an_operator_can_stop_a_run_that_is_not_paused() -> None:
+    state = advance(SessionState.start("r", "replay"), "abort", "operator", operator_id=OP)
+    assert state.phase == "finished"
 
 
 def test_stuck_must_open_an_intervention() -> None:
@@ -100,16 +136,16 @@ def test_controller_must_match_phase() -> None:
     fields["controller"] = "human"
     with pytest.raises(ValidationError, match="requires controller automation"):
         SessionState.model_validate(fields)
+    held = _held().model_dump()
+    held["operator_id"] = None
+    with pytest.raises(ValidationError, match="human_active requires the operator_id"):
+        SessionState.model_validate(held)
 
 
-@pytest.mark.parametrize("phase_events", [["stuck_detected"], ["stuck_detected", "take_control"]])
-def test_automation_is_locked_out_unless_it_holds_control(phase_events: list[str]) -> None:
-    state = SessionState.start("r", "replay")
-    for event in phase_events:
-        actor = "automation" if event == "stuck_detected" else "operator"
-        state = advance(state, event, actor, intervention_id="int")  # type: ignore[arg-type]
+@pytest.mark.parametrize("held", [False, True])
+def test_automation_is_locked_out_unless_it_holds_control(held: bool) -> None:
     with pytest.raises(NotInControl):
-        require_automation(state)
+        require_automation(_held() if held else _paused())
 
 
 def test_store_shares_state_across_handles_with_compare_and_swap(tmp_path: Path) -> None:
@@ -123,9 +159,10 @@ def test_store_shares_state_across_handles_with_compare_and_swap(tmp_path: Path)
         "stuck_detected", "automation", expected_version=0, intervention_id="int"
     )
     assert ops_side.read() == paused
-    ops_side.transition("take_control", "operator", expected_version=1)
+    ops_side.transition("take_control", "operator", expected_version=1, operator_id=OP)
     with pytest.raises(StaleState, match="version 2, caller expected 1"):
-        run_side.transition("hand_back", "operator", expected_version=1)
+        run_side.transition("hand_back", "operator", expected_version=1, operator_id=OP)
+    assert ops_side.read().operator_id == OP
     assert sorted(p.name for p in path.parent.iterdir()) == [
         "session_state.json",
         "session_state.json.lock",

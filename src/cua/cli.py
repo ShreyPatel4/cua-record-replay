@@ -4,14 +4,18 @@ Exit codes: 0 success or business outcome, 1 usage or internal error, 2 hard fai
 """
 
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn
 
 import typer
 from dotenv import load_dotenv
 
 from cua.log import configure_logging
 
+if TYPE_CHECKING:
+    from cua.artifact.catalog import Catalog
+
 ARTIFACTS_DIR = Path("artifacts")
+POLICY_FILE = Path("policy/allowlist.yaml")
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 ops_app = typer.Typer(no_args_is_help=True, help="Operator commands for paused runs.")
@@ -101,12 +105,17 @@ def ops_abort(run_id: str) -> None:
 RootOption = Annotated[Path, typer.Option("--root", help="Catalog directory.")]
 
 
+def _catalog(root: Path) -> "Catalog":
+    """Catalog checked against the policy file when one exists at the default location."""
+    from cua.artifact.catalog import Catalog
+
+    return Catalog(root, POLICY_FILE if POLICY_FILE.exists() else None)
+
+
 @catalog_app.command("list")
 def catalog_list(root: RootOption = ARTIFACTS_DIR) -> None:
     """List saved capabilities with version and approval status."""
-    from cua.artifact.catalog import Catalog
-
-    entries = Catalog(root).entries()
+    entries = _catalog(root).entries()
     if not entries:
         typer.echo(f"no capabilities in {root}")
         return
@@ -123,10 +132,10 @@ def catalog_show(
     """Print a capability's caller-facing contract as JSON: inputs, outputs, success, status."""
     import json
 
-    from cua.artifact.catalog import Catalog, CatalogError
+    from cua.artifact.catalog import CatalogError
 
     try:
-        capability, path = Catalog(root).get(capability_id, version)
+        capability, path = _catalog(root).get(capability_id, version, include_drafts=True)
     except CatalogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -163,11 +172,11 @@ def catalog_approve(
     root: RootOption = ARTIFACTS_DIR,
 ) -> None:
     """Flip a draft capability to approved so unattended replay may run it."""
-    from cua.artifact.catalog import Catalog, CatalogError
+    from cua.artifact.catalog import CatalogError
 
-    catalog = Catalog(root)
+    catalog = _catalog(root)
     try:
-        capability, _ = catalog.get(capability_id, version)
+        capability, _ = catalog.get(capability_id, version, include_drafts=True)
         path = catalog.approve(capability_id, capability.capability.version, by)
     except CatalogError as exc:
         typer.echo(str(exc), err=True)

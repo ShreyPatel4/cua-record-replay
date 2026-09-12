@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from cua.artifact.overrides import resolve_for_tenant
+from cua.artifact.overrides import OverrideError, resolve_for_tenant
 from cua.artifact.schema import Capability
 from cua.artifact.versioning import check_version, parse_version
 
@@ -29,7 +30,7 @@ class CatalogEntry(BaseModel):
 
     id: str = Field(description="Capability id.")
     version: str = Field(description="Semver.")
-    status: str = Field(description="draft, approved, or deprecated.")
+    status: Literal["draft", "approved", "deprecated"] = Field(description="Approval state.")
     name: str = Field(description="Human name.")
     path: str = Field(description="File path.")
 
@@ -39,17 +40,42 @@ def dump_json(capability: Capability) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
-def load_capability(path: Path) -> Capability:
-    """Parse and validate, including every tenant override, so a bad override fails at load time."""
-    capability = Capability.model_validate_json(path.read_text(encoding="utf-8"))
-    for tenant in capability.tenant_overrides:
-        resolve_for_tenant(capability, tenant)
+def load_capability(path: Path, policy_file: Path | None = None) -> Capability:
+    """Parse and validate, resolving every tenant, so a bad override fails at load time.
+
+    With a policy file, the base and every tenant must also stay inside the named policy.
+    """
+    from cua.policy.fit import capability_policy_errors
+    from cua.policy.models import PolicyError, load_policy
+
+    try:
+        capability = Capability.model_validate_json(path.read_text(encoding="utf-8"))
+        variants = [capability] + [
+            resolve_for_tenant(capability, t) for t in capability.tenant_overrides
+        ]
+    except (ValidationError, OverrideError) as exc:
+        raise CatalogError(f"{path.name}: {exc}") from exc
+    if policy_file is None:
+        return capability
+    try:
+        policy = load_policy(policy_file, capability.capability.policy_ref)
+    except PolicyError as exc:
+        raise CatalogError(f"{path.name}: {exc}") from exc
+    tenants = [None, *capability.tenant_overrides]
+    problems = [
+        f"{'base' if tenant is None else 'tenant ' + tenant}: {error}"
+        for tenant, variant in zip(tenants, variants, strict=True)
+        for error in capability_policy_errors(variant, policy)
+    ]
+    if problems:
+        raise CatalogError(f"{path.name} does not fit its policy: " + "; ".join(problems))
     return capability
 
 
 class Catalog:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, policy_file: Path | None = None) -> None:
         self.root = root
+        self.policy_file = policy_file
 
     @staticmethod
     def filename(capability: Capability) -> str:
@@ -57,16 +83,24 @@ class Catalog:
 
     def _load_all(self) -> list[tuple[Capability, Path]]:
         found: list[tuple[Capability, Path]] = []
+        problems: list[str] = []
         for path in sorted(self.root.glob(f"*{SUFFIX}")):
             if path.name == EXAMPLE_FILE:
                 continue
-            capability = load_capability(path)
+            try:
+                capability = load_capability(path, self.policy_file)
+            except CatalogError as exc:
+                problems.append(str(exc))
+                continue
             if path.name != self.filename(capability):
-                raise CatalogError(
+                problems.append(
                     f"{path.name} holds {self.filename(capability).removesuffix(SUFFIX)}; "
                     f"expected file name {self.filename(capability)}"
                 )
+                continue
             found.append((capability, path))
+        if problems:
+            raise CatalogError(f"{len(problems)} bad catalog file(s): " + " | ".join(problems))
         return found
 
     def entries(self) -> list[CatalogEntry]:
@@ -81,21 +115,41 @@ class Catalog:
             for c, p in self._load_all()
         ]
 
-    def get(self, capability_id: str, version: str | None = None) -> tuple[Capability, Path]:
+    def get(
+        self, capability_id: str, version: str | None = None, *, include_drafts: bool = False
+    ) -> tuple[Capability, Path]:
+        """An exact version, or else the latest approved one (latest non-deprecated with drafts)."""
         matches = [(c, p) for c, p in self._load_all() if c.capability.id == capability_id]
         if version is not None:
             matches = [(c, p) for c, p in matches if c.capability.version == version]
+            wanted = f"{capability_id}@{version}"
         else:
-            matches = [(c, p) for c, p in matches if c.capability.status != "deprecated"]
+            allowed = {"approved", "draft"} if include_drafts else {"approved"}
+            usable = [(c, p) for c, p in matches if c.capability.status in allowed]
+            if not usable and any(c.capability.status == "draft" for c, _ in matches):
+                raise CatalogError(
+                    f"{capability_id} has no approved version; approve a draft or allow drafts"
+                )
+            matches = usable
+            wanted = capability_id
         if not matches:
-            wanted = f"{capability_id}@{version}" if version else capability_id
             raise CatalogError(f"no capability {wanted} in {self.root}")
         return max(matches, key=lambda cp: parse_version(cp[0].capability.version))
 
     def save(self, capability: Capability, *, overwrite: bool = False) -> Path:
+        if capability.capability.status != "draft":
+            raise CatalogError("only drafts are saved; approval happens through catalog approve")
         path = self.root / self.filename(capability)
-        if path.exists() and not overwrite:
-            raise CatalogError(f"{path} already exists; bump the version instead of overwriting")
+        if path.exists():
+            existing = load_capability(path)
+            if existing.capability.status != "draft":
+                raise CatalogError(
+                    f"{path} is {existing.capability.status} and is never overwritten"
+                )
+            if not overwrite:
+                raise CatalogError(
+                    f"{path} already exists; bump the version instead of overwriting"
+                )
         previous = [
             c
             for c, _ in self._load_all()

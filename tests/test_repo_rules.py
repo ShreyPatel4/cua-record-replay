@@ -1,6 +1,6 @@
 """Repo hygiene rules that are cheap to enforce mechanically rather than by review.
 
-No em dashes in authored text (recorded evidence is exempt); no stable selectors in mock markup.
+No em dashes in authored text or artifacts (evidence is exempt); no stable selectors in markup.
 """
 
 from __future__ import annotations
@@ -11,8 +11,9 @@ from support import ROOT, candidate_files
 
 TEXT_SUFFIXES = {".md", ".py", ".html", ".yaml", ".yml", ".toml", ".json", ".txt", ".cfg"}
 EM_DASH = "\u2014"
-# Evidence and artifacts are recorded output; rewriting them to satisfy a style rule is tampering.
-RECORDED_DIRS = {"evidence", "artifacts"}
+# Evidence is recorded app output; rewriting it to satisfy a style rule is tampering. Artifacts
+# are reviewed documents, so the recorder normalizes their prose and the rule applies to them.
+RECORDED_DIRS = {"evidence"}
 
 
 def test_no_em_dashes_in_human_readable_files() -> None:

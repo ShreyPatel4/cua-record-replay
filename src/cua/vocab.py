@@ -1,4 +1,4 @@
-"""Shared vocabulary: action types, risk classes, identifier shapes, and the template syntax.
+"""Shared vocabulary: action types, risk classes, identifier shapes, engine codes, and templates.
 
 Artifact, policy, replay, and discovery all import these so each word means one thing everywhere.
 """
@@ -28,9 +28,33 @@ ParamName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]
 TenantId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 OutcomeCode = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$")]
 
+# Codes that fail a run before step 1 runs, so the result has no step_reached.
+PRE_RUN_CODES = frozenset(
+    {
+        "INPUT_INVALID",
+        "DRAFT_NOT_APPROVED",
+        "TENANT_UNKNOWN",
+        "SECRET_MISSING",
+        "POLICY_MISMATCH",
+    }
+)
+# Codes the engine itself produces. Artifacts declare app-specific ones and may not reuse these.
+ENGINE_CODES = PRE_RUN_CODES | frozenset(
+    {
+        "TARGET_NOT_FOUND",
+        "TARGET_AMBIGUOUS",
+        "CHECKPOINT_TIMEOUT",
+        "POLICY_BLOCKED",
+        "UNEXPECTED_DIALOG",
+        "OUTPUT_EXTRACTION_FAILED",
+        "CONFIRMATION_REQUIRED",
+        "OPERATOR_ABORTED",
+        "INTERVENTION_EXPIRED",
+    }
+)
+
 # {{inputs.member_id}}, {{secrets.operator_password}}, {{surface.entry_url}}
 TEMPLATE_RE = re.compile(r"\{\{\s*(inputs|secrets|surface)\.([a-z][a-z0-9_]*)\s*\}\}")
-TemplateScope = Literal["inputs", "secrets", "surface"]
 
 # Field names that mark a value as a credential. Deliberately broad: over-redaction is cheap.
 SENSITIVE_FIELD_RE = re.compile(r"(?i)(pass|pin\b|secret|token|otp|ssn)")

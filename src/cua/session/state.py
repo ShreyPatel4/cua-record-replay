@@ -40,13 +40,17 @@ CONTROLLER_FOR: dict[Phase, Controller] = {
 TRANSITIONS: dict[tuple[Phase, Event], Phase] = {
     ("running", "stuck_detected"): "paused_for_human",
     ("running", "finish"): "finished",
+    ("running", "abort"): "finished",
     ("paused_for_human", "take_control"): "human_active",
     ("paused_for_human", "abort"): "finished",
     ("paused_for_human", "expire"): "finished",
     ("human_active", "hand_back"): "resuming",
     ("human_active", "abort"): "finished",
+    # The operator's CLI died or they walked away: expire instead of hanging the run forever.
+    ("human_active", "expire"): "finished",
     ("resuming", "checkpoint_reverified"): "running",
     ("resuming", "reverify_failed"): "paused_for_human",
+    ("resuming", "abort"): "finished",
 }
 
 # Which actor may fire which event. The operator can never resume automation without a hand-back.
@@ -67,7 +71,7 @@ class IllegalTransition(RuntimeError):
 
 
 class NotInControl(RuntimeError):
-    """Raised by the surface when automation tries to act while it does not hold control."""
+    """Automation acted without control, or an operator acted on a session another one holds."""
 
 
 class StaleState(RuntimeError):
@@ -83,6 +87,7 @@ class TransitionRecord(SessionModel):
     to_phase: Phase = Field(description="Phase after the event.")
     event: Event = Field(description="What happened.")
     actor: Actor = Field(description="Who fired the event.")
+    operator_id: str | None = Field(default=None, description="Operator behind the event, if any.")
     at: datetime = Field(description="When, timezone-aware.")
     note: str = Field(default="", description="Free text, redacted by the caller.")
 
@@ -96,7 +101,19 @@ class SessionState(SessionModel):
         ge=0, description="Incremented on every transition; used for compare-and-swap."
     )
     updated_at: datetime = Field(description="Last transition time.")
-    intervention_id: str | None = Field(default=None, description="Open intervention, if paused.")
+    owner_pid: int | None = Field(
+        default=None,
+        description="Process that owns the browser, so ops can tell a paused run from a dead one.",
+    )
+    operator_id: str | None = Field(
+        default=None,
+        description="Operator holding or resuming from control. Only they may hand back or abort "
+        "while human_active.",
+    )
+    intervention_id: str | None = Field(
+        default=None,
+        description="Open intervention while paused, and the last one when a pause ends the run.",
+    )
     history: list[TransitionRecord] = Field(default_factory=list, description="All transitions.")
 
     @model_validator(mode="after")
@@ -106,10 +123,14 @@ class SessionState(SessionModel):
             raise ValueError(
                 f"phase {self.phase} requires controller {expected}, got {self.controller}"
             )
+        if self.phase == "human_active" and self.operator_id is None:
+            raise ValueError("human_active requires the operator_id holding control")
         return self
 
     @classmethod
-    def start(cls, run_id: str, kind: Literal["discovery", "replay"]) -> SessionState:
+    def start(
+        cls, run_id: str, kind: Literal["discovery", "replay"], owner_pid: int | None = None
+    ) -> SessionState:
         return cls(
             run_id=run_id,
             kind=kind,
@@ -117,6 +138,7 @@ class SessionState(SessionModel):
             controller="automation",
             version=0,
             updated_at=datetime.now(UTC),
+            owner_pid=owner_pid,
         )
 
 
@@ -127,6 +149,7 @@ def advance(
     *,
     note: str = "",
     intervention_id: str | None = None,
+    operator_id: str | None = None,
     now: datetime | None = None,
 ) -> SessionState:
     """Pure transition function. Raises IllegalTransition for anything not in the table."""
@@ -135,18 +158,30 @@ def advance(
         raise IllegalTransition(f"{event!r} is not allowed from {state.phase!r}")
     if actor not in ALLOWED_ACTORS[event]:
         raise IllegalTransition(f"{actor!r} may not fire {event!r}")
+    if actor == "operator" and operator_id is None:
+        raise IllegalTransition(f"operator events need an operator_id, got none for {event!r}")
+    if event == "stuck_detected" and intervention_id is None:
+        raise IllegalTransition("stuck_detected must open an intervention")
+    if state.phase == "human_active" and actor == "operator" and operator_id != state.operator_id:
+        raise NotInControl(
+            f"{operator_id!r} does not hold run {state.run_id}; {state.operator_id!r} does"
+        )
+
     at = now or datetime.now(UTC)
     record = TransitionRecord(
-        from_phase=state.phase, to_phase=target, event=event, actor=actor, at=at, note=note
+        from_phase=state.phase,
+        to_phase=target,
+        event=event,
+        actor=actor,
+        operator_id=operator_id,
+        at=at,
+        note=note,
     )
-    if event == "stuck_detected":
-        if intervention_id is None:
-            raise IllegalTransition("stuck_detected must open an intervention")
-        open_intervention: str | None = intervention_id
-    elif target in ("paused_for_human", "human_active", "resuming"):
-        open_intervention = intervention_id or state.intervention_id
+    if target == "running":
+        open_intervention, holder = None, None
     else:
-        open_intervention = None
+        open_intervention = intervention_id or state.intervention_id
+        holder = operator_id if event == "take_control" else state.operator_id
     return state.model_copy(
         update={
             "phase": target,
@@ -154,6 +189,7 @@ def advance(
             "version": state.version + 1,
             "updated_at": at,
             "intervention_id": open_intervention,
+            "operator_id": holder,
             "history": [*state.history, record],
         }
     )
@@ -206,6 +242,7 @@ class StateStore:
         expected_version: int | None = None,
         note: str = "",
         intervention_id: str | None = None,
+        operator_id: str | None = None,
     ) -> SessionState:
         with self._locked():
             current = self.read()
@@ -213,6 +250,13 @@ class StateStore:
                 raise StaleState(
                     f"state is at version {current.version}, caller expected {expected_version}"
                 )
-            updated = advance(current, event, actor, note=note, intervention_id=intervention_id)
+            updated = advance(
+                current,
+                event,
+                actor,
+                note=note,
+                intervention_id=intervention_id,
+                operator_id=operator_id,
+            )
             self._write(updated)
             return updated

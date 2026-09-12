@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from cua.artifact.schema import Capability, WebSurface
+from cua.artifact.schema import Capability, ClickStep, SelectOptionStep, TypeTextStep, WebSurface
 
 
 class OverrideError(ValueError):
@@ -26,10 +26,19 @@ def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _credential_steps(capability: Capability) -> set[str]:
+    return {
+        s.id
+        for s in capability.steps
+        if isinstance(s, ClickStep | TypeTextStep | SelectOptionStep) and s.target.looks_sensitive
+    }
+
+
 def resolve_for_tenant(capability: Capability, tenant: str | None) -> Capability:
     """The base capability for tenant None; otherwise the base with that tenant's patch applied.
 
-    The result carries no tenant_overrides, so it can never be resolved twice.
+    The result carries no tenant_overrides, so it can never be resolved twice. A target that looks
+    like a credential field in the base must still look like one after the patch.
     """
     if tenant is None:
         return capability
@@ -51,8 +60,14 @@ def resolve_for_tenant(capability: Capability, tenant: str | None) -> Capability
     data["tenant_overrides"] = {}
 
     try:
-        return Capability.model_validate(data)
+        resolved = Capability.model_validate(data)
     except ValidationError as exc:
         raise OverrideError(
             f"tenant {tenant!r} override produces an invalid capability: {exc}"
         ) from exc
+    lost = sorted(_credential_steps(capability) - _credential_steps(resolved))
+    if lost:
+        raise OverrideError(
+            f"tenant {tenant!r} override makes credential targets look ordinary: {lost}"
+        )
+    return resolved

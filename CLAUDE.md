@@ -43,61 +43,118 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - `.env.example` leaves `CORELEDGER_OPERATOR_PASSWORD` blank; the app refuses to start without it.
   No committed file holds a working credential.
 
-## Open items the phase 1 contracts must settle (from the phase 0 review)
+## Settled in phase 1 (the phase 0 review's open items)
 
-- `--repeat` vs counted faults: `interstitial`, `session_expired` and friends self-clear after
-  firing, so run 1 of a repeat sees the fault and runs 2 to N do not. The stability report must
-  either re-arm the fault set before each iteration or record the armed-fault snapshot per
-  iteration, so a legitimate difference is never reported as flakiness or drift.
-- Pin the slow-path timing as a test once step timeouts exist:
-  `detail_step_checkpoint_timeout_ms < DEFAULT_SLOW_MS < wait_retry_budget_ms`. Otherwise a later
-  timeout tweak silently makes `od_slow` unreachable and the recovered run passes for the wrong reason.
-- Action enum needs `select_option(ref, label)`: the sub-account form uses a `<select>`, which
-  `type_text` cannot drive.
-- `confirm()` must be modelled explicitly. Playwright auto-dismisses unhandled dialogs, so the
-  irreversible click silently does nothing. Frame dialogs reach `page.on("dialog")`. Options: a step
-  field `dialog: accept | dismiss` classed irreversible, plus a surface-level handler that fails the
-  step loudly on any unexpected dialog.
-- `url_matches` detectors need a frame scope. In the frameset `page.url` stays `/` while the `main`
-  frame moves to `/login?...`; detectors evaluate the frame URL named by `frame_path`.
-- Policy draft vs routes: the shell loads `/banner`, so either allow it or gate only agent-initiated
-  top-level navigations. Irreversibility cannot key on `/subaccounts/create` (that is the POST
-  target, reached only after the act); key it on the form page plus the accepted dialog.
-- Perception source (verified by probe): `page.locator(":root").aria_snapshot(mode="ai",
-  boxes=True)` walks both frames with frame-prefixed refs (`f2e14`) and boxes, and `aria-ref=`
-  locators resolve and act across frames from the page. Refs are NOT stable: they are reassigned on
-  every snapshot (`f2e14` was the textbox on search and a table row on detail). So a ref is valid
-  only for the snapshot the model saw; the loop re-resolves it and checks role and name before
-  acting, and the recorder builds the ladder in that same turn. Refs never enter an artifact.
-  ai-mode does not mark span/td click handlers (`cell "Find"` has no `[cursor=pointer]`), so a
-  narrow DOM pass is still needed to flag `onclick` targets.
+- Repeat runs vs self-clearing faults: `IterationSummary.conditions` records the fault set the
+  harness re-armed before each iteration; `StabilityReport.determinism` compares only iterations
+  with equal conditions and says `insufficient_repeats` when a group has one run.
+- Slow-path timing is pinned by `test_slow_path_timing_makes_the_recovery_reachable`.
+- `select_option` exists; `ClickStep.dialog` declares confirm/alert and the answer.
+- URL conditions and waits carry `frame_path`.
+- Irreversibility keys on the accepted dialog (gate `phase="dialog"`), not on the POST target.
+- Perception facts from the probe stand: `aria_snapshot(mode="ai", boxes=True)` walks frames, refs
+  are reassigned every snapshot and never enter an artifact, and a narrow DOM pass flags `onclick`
+  spans and tds because ai-mode does not mark them.
 
 ## Phase 1 contract decisions (pushbacks on the kickoff sketch)
 
 - `tenant_overrides` is top level, keyed by tenant id, each with its own `entry_url`, `steps` and
-  `checkpoints` patches. Under `surface` it could only describe one tenant. Patches may not touch a
-  step's `id`, `action`, or `risk` (a tenant must never downgrade risk). Objects deep-merge, lists
-  replace whole (a ladder is one unit). Every tenant is resolved and validated at load.
-- `secrets` block: credentials are `{{secrets.name}}` templates backed by env vars. The schema
-  rejects any literal or non-sensitive value typed into a field whose name looks like a credential,
-  and rejects secrets or sensitive inputs in navigate URLs.
-- Conditions, URL checks, and message sources carry `frame_path`, because the app is a frameset and
-  `page.url` never changes.
-- Detectors have an optional `scope` (step ids) to avoid false positives like a stray "OK".
-  `checkpoint_timeout` is only valid as a detector trigger. Outcomes use a `type` discriminator.
-- `ClickStep.dialog` declares an expected native dialog and the answer; `select_option` exists.
-- Each wait carries its own `timeout_ms`; the member-detail step uses 3000 so `slow` trips recovery.
+  `checkpoints` patches. Objects deep-merge, lists replace whole (a ladder is one unit). Patches may
+  change targets and waits but never `id`, `action`, `risk`, `on_fail`, `value`, `option_label`,
+  `url`, `key`, `dialog`, `target.fingerprint.role` or `target.fingerprint.input_type`. A target that
+  looks like a credential field in the base must still look like one after the patch. Every tenant
+  is resolved and validated at load, and with a policy file its `entry_url` must pass the policy.
+- `secrets` are `{{secrets.name}}` templates backed by env vars, each with a `kind`. A `credential`
+  (password, PIN) is typed only into a target that looks like a credential field (name, label,
+  anchor, text rung, or `input_type=password`) and is redacted anywhere, including every base64
+  alignment. An `identity` (operator id) may go into any field and is redacted as a whole token, so
+  the dev operator id is a non-word (`teller-0417`). Secrets and sensitive inputs must be a whole
+  typed value, never in URLs, conditions, or option labels, and their targets never record text.
+- Conditions may template non-sensitive inputs (`cp_member_loaded` checks the requested member
+  number is on screen); URL patterns render them regex-escaped.
+- Detectors have an optional `scope`; it is required for `run_steps` recoveries and
+  `checkpoint_timeout` triggers, and a timeout trigger's scoped steps must wait on that checkpoint.
+  Detector codes may not reuse engine codes, and one code has one outcome type.
+- `run_steps` re-runs earlier steps, each through the gate and its own wait, except the last: its
+  wait is replaced by re-verifying the interrupted step's checkpoint. Verified against the mock:
+  signing in again after expiry redirects back to `/members/10007`, so s04's own `cp_search_ready`
+  can never hold during recovery. Re-run steps come before the scope, in flow order, and are never
+  irreversible or dialog-answering. `od_session_expired` is scoped to s06, the only step whose page
+  checks the session mid-flow.
+- `Recoverable.on_exhausted` (hard_failure or escalate) decides what an exhausted recovery becomes;
+  the code stays the detector's. `AutomaticRecovery.succeeded` records the exhausted ones.
+- Accepting a `confirm` requires the step to declare `risk: irreversible`.
+- `BusinessOutcome.field` must be a declared input and needs `message_from`; replay returns it in
+  `ReplayResult.field_errors`. `step_reached` is null only for pre-run codes (`INPUT_INVALID`,
+  `DRAFT_NOT_APPROVED`, `TENANT_UNKNOWN`, `SECRET_MISSING`, `POLICY_MISMATCH`).
+  `ReplayResult.contract_problems(capability)` checks codes, output types and required outputs;
+  `for_evidence` masks sensitive inputs and outputs. Output digests are HMAC with a per-report key.
+- `HumanIntervention.outcome` is handed_back, aborted or expired, so an abort after take-control is
+  representable. Session state records `operator_id` (only the holder may hand back or abort) and
+  `owner_pid`; abort is legal from running, paused, human_active and resuming; expire from paused
+  and human_active; a pause that ends the run keeps its intervention id.
+- Semver: major for inputs (shape, removal, new required), outputs (removal, type, sensitivity),
+  outcome codes (removal, reclassification), secrets (names, kinds, env vars), surface kind, and
+  `policy_ref`. Minor for any flow change, new optional inputs, new outputs, new codes. Patch for
+  wording only.
+- Catalog: only drafts are saved, approved files are never overwritten, `get` without a version
+  returns the latest approved (drafts only with `include_drafts`), and a bad file is named in the
+  error.
+- Policy gate: `ProposedAction.phase` is action, navigation (a document request the page started,
+  intercepted before sending) or dialog (the real message, about to be answered). Paths are decoded
+  once, slashes collapsed and dot segments resolved before matching; double encoding, backslashes,
+  `;` path parameters, control characters, userinfo and bad ports are blocked; query names match
+  case-insensitively; IPv6 origins are bracketed.
+- Redaction keeps `$` amounts, comma and decimal amounts, and compact run-id timestamps; any other
+  run of five or more digits keeps its last four, including in comma lists and next to letters.
+  Apply it to string values, not rendered JSON numbers.
+- `Strict` models refuse attribute assignment but nested lists and dicts are not deep-frozen; build
+  changed copies through `model_dump` and `model_validate`.
 - `surface` is a discriminated union `web | desktop`. Desktop is designed, not built, and rejects
   navigate steps and URL/status conditions.
-- `policy_ref` is a plain policy id. Policy globs: `*` is one segment, `**` any depth; deny wins.
-  The gate checks the acting frame's URL plus a navigate's destination, and uses the higher of the
-  declared and computed risk.
-- Targets carry a `fingerprint` (role, name, redacted text at record time) and `notes` explaining
-  the ladder, which is the brief's "reasoning about robustness" per target.
+- Targets carry a `fingerprint` (role, name, redacted text, input type at record time) and `notes`
+  explaining the ladder, which is the brief's "reasoning about robustness" per target.
 - `127.0.0.1` everywhere instead of `localhost` (macOS resolves localhost to ::1 first).
 - `artifacts/example.capability.json` is the hand-written reference; the catalog does not list it
-  but it replays by path. Catalog files are `<id>@<version>.capability.json` and saving enforces
-  semver bump rules against the previous version.
+  but it replays by path. Catalog files are `<id>@<version>.capability.json`. Artifacts follow the
+  no-em-dash rule; only `evidence/` is exempt.
+
+## Runtime semantics the schema now pins (field descriptions are the spec)
+
+- Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in
+  artifact order, then the wait condition; the first detector match ends the wait. At a checkpoint
+  wait's deadline, `checkpoint_timeout` detectors get their turn, else `CHECKPOINT_TIMEOUT`.
+- Target resolution retries each tick until the step's wait timeout, then `TARGET_NOT_FOUND` or
+  `TARGET_AMBIGUOUS`. Every rung is tried top to bottom on every replay; a later rung than
+  `recorded_rung` raises a drift warning, an earlier one does not.
+- Visible text is the element's own innerText, whitespace-collapsed; hidden elements never match.
+  `text_present` is a case-sensitive substring of the frame body's innerText.
+- `anchor_relative`: direction means starting past the anchor's edge and overlapping it on the other
+  axis, ordered by distance; `same_row` is the anchor's nearest `tr`; `clickable` is a, button,
+  submit or button input, role button or link, or any element with `onclick`; `nth` is 1-based.
+- `status_code` is the most recent document response committed in the frame.
+- Click recovery restarts the interrupted wait with its full timeout; wait_retry keeps polling the
+  same wait (detectors included) for `max_total_ms`.
+- Messages are extracted first and redacted before they enter a result or evidence.
+
+## Deferred from the phase 1 review, with reasons
+
+- Screens-as-states graph: declined. The brief asks for ordered steps, a runtime path choice makes
+  replay non-deterministic, and the findings it targeted are fixed inside the linear model. It goes
+  in REPORT.md cuts as the next design step.
+- Separate per-tenant implementation files: `tenant_overrides` resolved at load covers the need
+  today. REPORT.md cuts.
+- Overrides swapping union variants or patching detectors, `option_map` for enum inputs, and
+  `skip_if` preconditions: add only if `open_subaccount` needs them, otherwise REPORT.md cuts.
+- Fake-clock test of the poll loop: the loop is phase 4 engine code; the test lands with it.
+- Gate interception (phase 2 obligation): `PlaywrightSurface` routes frame document requests
+  through the gate with `phase="navigation"` and calls it from the dialog handler with
+  `phase="dialog"` before answering. Until then the gate only sees what the caller hands it.
+- Heartbeat lease beyond `owner_pid`: phase 5, if the handoff demo needs it.
+- The evidence writer must use `ReplayResult.for_evidence` and the redactor on string values only
+  (phase 4).
+- A text rung reading like a credential ("Forgot password") forbids recording that target's text.
+  Over-strict on purpose; discovery omits the text.
 
 ---
 

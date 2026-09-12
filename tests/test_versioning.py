@@ -83,6 +83,49 @@ def _drop_output(data: dict[str, Any]) -> None:
     data["success"]["requires_outputs"] = []
 
 
+def _policy_ref(data: dict[str, Any]) -> None:
+    data["capability"]["policy_ref"] = "coreledger-subaccount"
+
+
+def _detector(data: dict[str, Any], detector_id: str) -> dict[str, Any]:
+    return next(d for d in data["outcome_detectors"] if d["id"] == detector_id)
+
+
+def _drop_outcome(data: dict[str, Any]) -> None:
+    data["outcome_detectors"].remove(_detector(data, "od_member_number_rejected"))
+
+
+def _reclassify_outcome(data: dict[str, Any]) -> None:
+    _detector(data, "od_access_denied")["outcome"] = {
+        "type": "business_outcome",
+        "code": "PERMISSION_DENIED",
+    }
+
+
+def _new_outcome(data: dict[str, Any]) -> None:
+    data["outcome_detectors"].append(
+        {
+            "id": "od_branch_closed",
+            "description": "d",
+            "when": {"kind": "text_present", "text": "Branch closed", "frame_path": ["main"]},
+            "scope": ["s06"],
+            "outcome": {"type": "business_outcome", "code": "BRANCH_CLOSED"},
+        }
+    )
+
+
+def _unmask_output(data: dict[str, Any]) -> None:
+    data["outputs"][0]["sensitive"] = False
+
+
+def _move_secret(data: dict[str, Any]) -> None:
+    data["secrets"][1]["env_var"] = "HARBOR_OPERATOR_PASSWORD"
+
+
+def _relax_required(data: dict[str, Any]) -> None:
+    data["inputs"][0]["required"] = False
+
+
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
@@ -94,6 +137,13 @@ def _drop_output(data: dict[str, Any]) -> None:
         (_required_input, "major"),
         (_tighter_pattern, "major"),
         (_drop_output, "major"),
+        (_policy_ref, "major"),
+        (_drop_outcome, "major"),
+        (_reclassify_outcome, "major"),
+        (_unmask_output, "major"),
+        (_move_secret, "major"),
+        (_new_outcome, "minor"),
+        (_relax_required, "minor"),
     ],
 )
 def test_change_classification(mutate: Mutation, expected: Bump) -> None:
