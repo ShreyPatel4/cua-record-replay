@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="2">
+  <tr><td class="hdr">Open sub-account for {{ member.name }} ({{ member.member_id }})</td></tr>
+  {% if errors %}<tr><td class="msg">Please correct the errors below.</td></tr>{% endif %}
+  <tr><td>
+    {# onsubmit blocks Enter-key submits: the only way to create is through the confirm() dialog. #}
+    <form method="post" action="/members/{{ member.member_id }}/subaccounts/create" onsubmit="return false">
+      <table class="row">
+        <tr>
+          <td class="c1">Account type</td>
+          <td>
+            <select name="acct_type">
+              <option value="">-- select --</option>
+              {% for code, label in types.items() %}
+              <option value="{{ code }}" {% if form.get('acct_type') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td class="err">{{ errors.get('acct_type', '') }}</td>
+        </tr>
+        <tr>
+          <td class="c1">Nickname</td>
+          <td><input type="text" name="nickname" size="20" value="{{ form.get('nickname', '') }}"></td>
+          <td class="err">{{ errors.get('nickname', '') }}</td>
+        </tr>
+        <tr>
+          <td class="c1">Initial deposit</td>
+          <td><input type="text" name="initial_deposit" size="10" value="{{ form.get('initial_deposit', '') }}"></td>
+          <td class="err">{{ errors.get('initial_deposit', '') }}</td>
+        </tr>
+        <tr>
+          <td></td>
+          <td class="btn" onclick="if (confirm('Open this sub-account? This cannot be undone.')) { document.forms[0].submit(); }">Create sub-account</td>
+          <td></td>
+        </tr>
+      </table>
+    </form>
+  </td></tr>
+</table>
+{% endblock %}

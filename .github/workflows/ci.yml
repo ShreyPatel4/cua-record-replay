@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CORELEDGER_OPERATOR_USER: operator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Generate a throwaway mock app password
+        run: |
+          pw="$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          echo "CORELEDGER_OPERATOR_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Lint
+        run: |
+          uv run ruff check
+          uv run ruff format --check
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Boot mock app through the CLI and hit every injection route
+        run: |
+          uv run cua mock serve --port 5050 > mock.log 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -sf http://127.0.0.1:5050/login > /dev/null && break
+            sleep 0.2
+          done
+          uv run cua mock smoke --base-url http://127.0.0.1:5050
+
+      - name: Secret leak scan
+        run: uv run pytest tests/test_leaks.py -q
+
+      - name: Mock app log on failure
+        if: failure()
+        run: cat mock.log || true

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="4">
+  <tr><td class="hdr">Member Lookup</td></tr>
+  <tr><td class="msg">No member found for member number {{ member_id }}.</td></tr>
+  <tr><td><a href="/members/search">Back to search</a></td></tr>
+</table>
+{% endblock %}

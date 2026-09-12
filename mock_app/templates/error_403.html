@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="4">
+  <tr><td class="hdr">Access denied</td></tr>
+  <tr><td class="msg">{{ reason }}</td></tr>
+  <tr><td>Error 403. Contact your security officer if you believe this is wrong.</td></tr>
+  <tr><td><a href="/members/search">Back to search</a></td></tr>
+</table>
+{% endblock %}

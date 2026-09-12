@@ -1,0 +1,21 @@
+# Install once with: uvx pre-commit install
+# Hooks run through uv so they use the locked tool versions, not a second copy.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: secret-leak-scan
+        name: secret leak scan (uses your real .env)
+        entry: uv run pytest tests/test_leaks.py tests/test_repo_rules.py -q
+        language: system
+        pass_filenames: false
+        always_run: true

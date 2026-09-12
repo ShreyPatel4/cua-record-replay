@@ -1,0 +1,366 @@
+# interface-cua: session context
+
+Take-home for interface.ai. `docs/brief.pdf` (gitignored, local only) is the source of truth for
+requirements, deliverable paths, and the seven REPORT.md headings. The sections below are copied
+from the kickoff (its sections 1, 2, and 6) so every session builds to the same decisions.
+
+Gates, all must be green before any commit:
+
+```sh
+uv run ruff check && uv run ruff format --check
+uv run mypy
+uv run pytest
+```
+
+Git: SSH remote only, identity from global config, no Co-Authored-By or Claude attribution lines.
+
+## Deviations from the kickoff, decided in phase 0
+
+- `docs/brief.pdf` is gitignored. It is interface.ai's document; the public repo should not
+  republish it.
+- Member 10013 (restricted) returns 403 on member detail as well as on sub-account create. The
+  kickoff only named create, but then `read_savings_balance` could never produce
+  `PERMISSION_DENIED` for a restricted member. `permission_denied` injection takes `on=create`
+  (default) or `on=detail` to force it on any member.
+- Injections are armed with an optional use count (`times`, None means until cleared) and string
+  params. `session_expired` defaults to one use. `slow` takes `ms` (default 5000).
+- Login page has real wrapped `<label>`s and an `<input type=submit>` ("a later vendor patch").
+  Search, detail, and sub-account pages keep role-less spans and tds. Realistic legacy apps are
+  inconsistent, and it gives the ladder a real spread of rungs.
+- `.env.example` leaves `CORELEDGER_OPERATOR_PASSWORD` blank; the app refuses to start without it.
+  No committed file holds a working credential.
+
+---
+
+## 1. The mental model
+
+There are three actors and one object.
+
+- The **model** discovers. It sees a screen, decides, acts. It only runs in discovery.
+- The **artifact** is the product of discovery. It is a capability an AI agent can call: typed inputs, typed outputs, ordered steps, checkpoints, outcome detectors. It never contains the model transcript.
+- The **replay engine** executes the artifact with no model in the loop and returns a structured result.
+- The **human** is a third actor who can take the live session when the other two cannot safely proceed.
+
+The seam that matters most: **perceiving and acting on a surface** is one layer; **the recorded flow** is another. The flow must not know it is running on Playwright. If I swap in a desktop surface, the artifact and replay engine should not change, only the surface adapter and the locator resolvers.
+
+## 2. Decisions already made
+
+### 2.1 Stack
+
+Python 3.11+. `uv` for env and dependency management. Playwright with Chromium as the surface. Pydantic v2 for every schema and every result type. Typer for the CLI. pytest for tests, ruff for lint and format, mypy in strict mode on `src/`. Structured logging through `structlog` writing JSON lines. Nothing else unless you can defend it in one sentence.
+
+Layout:
+
+```
+src/cua/
+  surface/        Surface protocol, PlaywrightSurface, DesktopSurface stub, a11y snapshot, screenshot
+  locate/         locator ladder: models, recorder (ref -> ladder), resolver (ladder -> handle)
+  policy/         PolicyGate, allowlist loader, risk classes, Redactor
+  artifact/       Capability schema, versioning, validation, catalog (load/save/list)
+  discover/       agent loop, tools, prompt, recorder that turns a run into an artifact
+  replay/         engine, outcome detectors, recovery actions, ReplayResult
+  session/        SessionController (control lock), intervention, operator CLI, human action capture
+  evidence/       run logger, evidence writer, manifest
+  cli.py          typer app: discover, replay, ops, catalog, mock
+mock_app/         Flask legacy credit union core, failure injection
+policy/allowlist.yaml
+artifacts/        saved capabilities (JSON)
+evidence/         committed runs (see section 9)
+tests/
+docs/brief.pdf
+README.md REPORT.md CLAUDE.md .env.example
+```
+
+### 2.2 LLM
+
+Anthropic API, model `claude-sonnet-4-6`, official `anthropic` Python SDK, native tool use. Key from `ANTHROPIC_API_KEY` in `.env`, loaded with `python-dotenv`, never committed. Ship `.env.example`.
+
+Tools exposed to the model, and nothing else:
+
+| tool | args | notes |
+|---|---|---|
+| `click` | `ref` | ref is a numbered node from the a11y snapshot |
+| `type_text` | `ref`, `text`, `clear_first` | text may be a literal or `{{inputs.name}}`; the loop substitutes before acting, the model never sees sensitive input values (see 2.8) |
+| `press_key` | `key` | Enter, Tab, Escape only |
+| `scroll` | `direction`, `amount` | |
+| `navigate` | `url` | gated by allowlist |
+| `read_text` | `ref` | returns visible text of the node; used to declare an output |
+| `declare_output` | `name`, `ref`, `type` | marks a node as an extraction target |
+| `request_confirmation` | `reason` | must be called before any action classified `irreversible` |
+| `done` | `summary`, `checkpoint_ref` | goal met, checkpoint_ref is the node that proves it |
+| `give_up` | `reason` | model cannot proceed; triggers escalation |
+
+The system prompt tells the model: it is operating a legacy banking UI, it must target by ref only, it must not guess coordinates, it must call `request_confirmation` before anything that creates or changes a record, it must call `declare_output` for any value the goal asks it to read, and it must stop with `done` only after it can see the evidence on screen. Keep the prompt under 60 lines and check it in as a file, not a string literal buried in code.
+
+Loop shape per turn: observe (screenshot + a11y snapshot with refs) -> model call -> parse tool call -> PolicyGate check -> act via Surface -> wait for settle -> log. Stopping conditions: `done`, `give_up`, `max_steps` (default 25), `timeout` (default 180s), or stuck detection (section 2.7). Retry the model call once on transient API error, then fail the run.
+
+### 2.3 Perception
+
+Hybrid, and this is a deliberate stance on the "no clean DOM" requirement. Each turn the model receives:
+
+1. A full page screenshot (PNG, scaled to max 1280 wide).
+2. A compact accessibility snapshot: a numbered list of interactive and text-bearing nodes with `ref`, `role`, `name`, visible text (truncated to 80 chars), and bounding box. Include nodes inside iframes and frames, prefixed with a frame path. Generate it from Playwright's accessibility snapshot plus a fallback DOM walk for nodes the a11y tree misses (legacy apps put click handlers on divs and spans; those need to show up).
+
+The model targets by ref. The recorder converts the ref into a locator ladder at record time. This is the same mental model as screenshot-plus-coordinates but with a stable handle, and it is the model that transfers to desktop: OS accessibility APIs expose the same role/name/bounds triple.
+
+Phase 0 note: the mock app's span and td controls have no ARIA role and do not appear in Playwright's aria snapshot at all (pinned by `tests/test_mock_app_browser.py`). The DOM walk is a first-class perception path, not a fallback, and `role_name` is unavailable for most controls outside the login page.
+
+### 2.4 Target application
+
+Build `mock_app/` as a local Flask app called "CoreLedger" that imitates a legacy credit union core. Deliberately hostile:
+
+- Top-level frameset or at least one iframe wrapping the main work area.
+- Table-based layout, nested tables for the member detail card.
+- No `id`, no `data-testid`, class names like `c1`, `row`, `pnl`.
+- Buttons are `<span onclick=...>` or `<td onclick=...>`, not `<button>`.
+- Inline JS `confirm()` on the sub-account submit.
+- Login page with fake credentials `operator / <password>` from `.env`, never hardcoded in the app or the artifact.
+- Session cookie with a configurable TTL.
+- Seed data: 15 synthetic members with fake names, member IDs `10001..10015`, savings and checking balances, one flagged "restricted" member for the permission-denied path. No real names, no real anything.
+
+Flow: login -> member search (text field + search span) -> member detail (shows savings balance in a nested table) -> "Open sub-account" link -> form (account type select, nickname text, initial deposit) -> confirm dialog -> confirmation screen with a generated sub-account number.
+
+Failure injection, all deterministic, toggled by a control page at `/__control` and by query param `?inject=<name>` for tests:
+
+| injection | trigger | correct classification |
+|---|---|---|
+| `not_found` | search for member ID not in seed | `business_outcome` code `MEMBER_NOT_FOUND` |
+| `validation_error` | initial deposit below 5.00 | `business_outcome` code `VALIDATION_ERROR` with field and message |
+| `interstitial` | member detail shows a "System notice" modal with an OK span | `recoverable`, recovery `dismiss_modal` |
+| `slow` | member detail renders after 4 to 8 s | `recoverable`, recovery `wait_and_retry` up to 15 s |
+| `session_expired` | mid-flow redirect to login | `recoverable` once via `reauthenticate` step, then `hard_failure` if it recurs |
+| `permission_denied` | sub-account creation on a restricted member returns a 403 page | `hard_failure` code `PERMISSION_DENIED`, escalate |
+| `app_error` | member detail returns a 500 page | `hard_failure` code `APP_ERROR`, escalate |
+| `layout_drift` | search button label changes from "Find" to "Search" and moves to a different table cell | replay must still succeed by falling to a lower ladder rung; record the rung |
+
+Ship `uv run cua mock serve` to start it and a smoke test that hits every injection route.
+
+### 2.5 Artifact schema
+
+This is the focal point of the evaluation. Design it before the agent loop exists. Pydantic models in `artifact/schema.py`, serialized to JSON. Every field has a description. Here is the shape I want, and you should push back if something is wrong rather than silently changing it:
+
+```json
+{
+  "schema_version": "1.0",
+  "capability": {
+    "id": "coreledger.member.read_savings_balance",
+    "version": "1.0.0",
+    "status": "draft",
+    "name": "Read member savings balance",
+    "description": "Log in, look up a member by ID, return their current savings balance.",
+    "created_from_run_id": "disc_2026...",
+    "created_at": "...",
+    "policy_ref": "policy/allowlist.yaml#coreledger-readonly"
+  },
+  "surface": {
+    "kind": "web",
+    "entry_url": "http://localhost:5050/",
+    "app_family": "coreledger",
+    "app_version_hint": "legacy-1",
+    "tenant_overrides": {}
+  },
+  "inputs": [
+    {"name": "member_id", "type": "string", "required": true, "pattern": "^[0-9]{5}$", "sensitive": false, "description": "Five digit member number"}
+  ],
+  "outputs": [
+    {"name": "savings_balance", "type": "money", "description": "Current savings balance as shown on the member card", "extract": {"target": "<locator ladder>", "parse": "money_usd"}}
+  ],
+  "steps": [
+    {
+      "id": "s01",
+      "action": "navigate",
+      "value": "{{surface.entry_url}}",
+      "risk": "safe",
+      "wait_for": {"kind": "checkpoint", "ref": "cp_login_visible"},
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s03",
+      "action": "type_text",
+      "target": {
+        "ladder": [
+          {"strategy": "role_name", "role": "textbox", "name": "Member number", "confidence": 0.9},
+          {"strategy": "label_text", "text": "Member number", "relation": "nearest_input"},
+          {"strategy": "anchor_relative", "anchor_text": "Find", "direction": "left", "role": "textbox"},
+          {"strategy": "bbox", "x": 0.31, "y": 0.22, "w": 0.18, "h": 0.03, "fragile": true}
+        ],
+        "recorded_rung": 0,
+        "frame_path": ["main"]
+      },
+      "value": "{{inputs.member_id}}",
+      "risk": "safe",
+      "wait_for": {"kind": "settle", "ms": 300}
+    }
+  ],
+  "checkpoints": {
+    "cp_login_visible": {"all": [{"text_present": "Operator sign-in"}]},
+    "cp_member_loaded": {"all": [{"text_present": "Member profile"}, {"element_present": "<ladder for savings cell>"}]},
+    "cp_done": {"ref": "cp_member_loaded"}
+  },
+  "outcome_detectors": [
+    {"id": "od_not_found", "when": {"text_present": "No member found"}, "class": "business_outcome", "code": "MEMBER_NOT_FOUND", "message_from": {"text_of": "<ladder>"}},
+    {"id": "od_interstitial", "when": {"element_present": "<ladder for System notice OK>"}, "class": "recoverable", "recovery": {"kind": "click", "target": "<ladder>", "max_attempts": 2}},
+    {"id": "od_slow", "when": {"checkpoint_timeout": "cp_member_loaded"}, "class": "recoverable", "recovery": {"kind": "wait_retry", "max_total_ms": 15000}},
+    {"id": "od_session", "when": {"url_matches": "/login"}, "class": "recoverable", "recovery": {"kind": "run_steps", "step_ids": ["s01","s02"], "max_attempts": 1}},
+    {"id": "od_403", "when": {"text_present": "Access denied"}, "class": "hard_failure", "code": "PERMISSION_DENIED", "escalate": true},
+    {"id": "od_500", "when": {"any": [{"text_present": "Internal Server Error"}, {"status_code": 500}]}, "class": "hard_failure", "code": "APP_ERROR", "escalate": true}
+  ],
+  "success": {"checkpoint": "cp_done", "requires_outputs": ["savings_balance"]},
+  "provenance": {"recorded_by": "discover", "model": "claude-sonnet-4-6", "evidence_run": "evidence/disc_.../", "review_notes": ""}
+}
+```
+
+Rules on the schema:
+
+- `id` is dotted and stable across versions; `version` is semver. Bump minor for step changes that keep the contract, major for input/output contract changes.
+- `status` is `draft` after recording and must be flipped to `approved` by a human (`cua catalog approve <id>`) before unattended replay runs without `--allow-draft`. This is the "confidence and approval" stretch goal folded in cheaply.
+- Values reference inputs by `{{inputs.x}}`. The recorder is responsible for spotting the literal the model typed and replacing it with the parameter. It asks me to confirm the mapping at the end of discovery.
+- Outcome detectors are evaluated after every step, in order, before the step's own checkpoint. The first match wins.
+- `tenant_overrides` exists and is empty. It is a map of `step_id -> partial step` and `checkpoint_id -> partial checkpoint` so a second tenant on the same `app_family` can override a ladder or a text string without re-recording. Document in REPORT.md how drift detection would populate it. Do not build the multi-tenant layer beyond this field and its merge function.
+- The artifact must be readable by a human in a text editor. Keep the JSON tidy and stable in key order.
+
+### 2.6 Locator ladder and determinism
+
+Recorder: given a ref from the a11y snapshot, produce the ladder in this order and record which rung was used: `role_name`, `label_text`, `text_exact` (normalized whitespace and case), `anchor_relative`, `bbox` (normalized to viewport, flagged fragile). Each rung carries a confidence. If the node has no accessible name and no text, `anchor_relative` becomes rung one and the recorder logs a warning that this target is weak. Never record a CSS id, XPath, or test id as a rung. Not because they are always bad, but because the brief says the real environment does not have them and I want the design to prove it does not need them.
+
+Resolver on replay: try rungs in order, require exactly one match, log the rung used. If a lower rung than recorded resolved, emit a `drift_signal` in the run log and in `ReplayResult.warnings`. Two or more matches is a resolution failure, not a guess. Zero matches on all rungs is `hard_failure` code `TARGET_NOT_FOUND` with the ladder and a screenshot in evidence.
+
+Waiting: no fixed sleeps in replay. Every step has a `wait_for` that is either a checkpoint, a settle (network idle plus DOM mutation quiet for N ms), or a URL change. Checkpoint timeout default 10 s, overridable per step. Recoverable detectors can extend it.
+
+Determinism means: same artifact plus same inputs plus same app state produces the same step sequence, same rungs resolved (or a logged drift), same checkpoints asserted, same outputs. Write this sentence into REPORT.md and make the `stability` command prove it: `cua replay --repeat 5` runs the artifact five times and reports pass count, rung distribution, and timing spread.
+
+### 2.7 Replay result contract and error taxonomy
+
+One Pydantic model, `ReplayResult`:
+
+```
+status: Literal["success", "business_outcome", "recovered_then_success", "hard_failure", "escalated"]
+capability_id, capability_version, run_id, duration_ms
+outputs: dict[str, Any]               # present on success and recovered_then_success
+outcome_code: str | None              # MEMBER_NOT_FOUND, VALIDATION_ERROR, PERMISSION_DENIED, APP_ERROR, TARGET_NOT_FOUND, CHECKPOINT_TIMEOUT, POLICY_BLOCKED, ...
+message: str | None                   # human readable, redacted
+step_reached: str                     # step id
+expected: str                         # what the checkpoint or detector expected
+observed: str                         # what was actually on screen, redacted
+recoveries: list[RecoveryRecord]      # what recovered, how many attempts
+warnings: list[str]                   # drift signals, weak targets
+evidence_dir: str
+```
+
+Non-negotiables:
+- `MEMBER_NOT_FOUND` and `VALIDATION_ERROR` return as `business_outcome` with exit code 0. They are answers, not crashes. There is a test that asserts this and the test name says why.
+- `hard_failure` returns exit code 2 and always has a screenshot, an a11y snapshot, and a Playwright trace zip in evidence.
+- `escalated` returns exit code 3 and includes the intervention request path.
+- Recoverable conditions that exhaust their attempts become `hard_failure` with the original code, not a generic error.
+- Policy blocks during replay are `hard_failure` code `POLICY_BLOCKED` and never silently skip a step.
+
+### 2.8 Safety and redaction
+
+`policy/allowlist.yaml`:
+
+```yaml
+policies:
+  coreledger-readonly:
+    origins: ["http://localhost:5050"]
+    paths_allow: ["/", "/login", "/members/search", "/members/*"]
+    paths_deny: ["/admin/*", "/__control*"]
+    actions_allow: ["navigate", "click", "type_text", "press_key", "scroll", "read_text"]
+    risk:
+      irreversible_when:
+        - {action: "click", target_text_matches: "(?i)(create|submit|open account|confirm)"}
+        - {url_matches: "/members/*/subaccounts/create"}
+      reversible_when:
+        - {action: "type_text"}
+    irreversible_handling: "escalate"     # block | confirm | escalate
+  coreledger-subaccount:
+    extends: coreledger-readonly
+    paths_allow: ["/members/*/subaccounts/*"]
+    irreversible_handling: "confirm"
+```
+
+`PolicyGate.check(action) -> Allow | Block(reason) | RequiresConfirmation(reason)` is the single choke point. Discovery and replay both call it. In discovery, `RequiresConfirmation` is auto-denied unless `--allow-irreversible` was passed, and the model is told so in the tool result so it can call `give_up` or find another route. In replay, an irreversible step under `escalate` handling pauses and raises an intervention; under `confirm` it requires `--confirm-irreversible` on the CLI; under `block` it is `POLICY_BLOCKED`.
+
+Redaction (`policy/redact.py`), applied before any write to logs, artifacts, screenshots filenames, intervention requests, and the model context:
+- Credentials: any value from `.env` and anything typed into a field whose accessible name matches `(?i)(pass|pin|secret|token)` becomes `[REDACTED]`.
+- Account and member numbers: keep last four, mask the rest.
+- Inputs marked `sensitive: true`: never appear in the artifact, only the parameter name does; in logs they are masked.
+- Page text sent to the model: run the same masking on the a11y snapshot text. The model never needs the real password to click a login button.
+- Screenshots: keep them, but the evidence manifest marks any screenshot taken on a page whose URL matches a `sensitive_pages` list, and README says how to purge them. Do not build image redaction; say it is a cut.
+
+Add a test that greps every file under `artifacts/` and `evidence/` for the demo password and fails if it appears. Run it in CI and pre-commit.
+
+### 2.9 Escalation and handoff
+
+This must be real, not a TODO. The operator UI can be a CLI.
+
+**Control model.** `SessionController` owns the one Playwright browser context (headed for the escalation demo, headless otherwise). It has a state machine:
+
+```
+controller: automation | human | nobody
+state:      running | paused_for_human | human_active | resuming | finished
+
+running --(stuck detected)--> paused_for_human      controller: nobody, intervention written
+paused_for_human --(ops take-control)--> human_active   controller: human, action capture on
+human_active --(ops hand-back)--> resuming          controller: automation, capture off
+resuming --(checkpoint re-verified)--> running
+resuming --(checkpoint fails)--> paused_for_human   new intervention, reason "post-handoff checkpoint failed"
+```
+
+Every `Surface.act` call checks `controller == automation` and raises `NotInControl` otherwise. This is the enforcement, and there is a unit test for it. The state is persisted to `evidence/<run_id>/session_state.json` so the ops CLI and the paused run agree on who is in control. The paused run polls that file (or a local socket, your call) and never touches the browser while `controller != automation`.
+
+**Stuck detection**, any of:
+- max steps or timeout hit in discovery
+- same tool call with same args three times in a row
+- an action produced no change in the a11y snapshot hash two turns running
+- `give_up` called
+- replay detector classified `hard_failure` with `escalate: true`
+- replay reached an `irreversible` step under `escalate` handling
+- recoverable recovery exhausted its attempts
+
+**InterventionRequest** written to `evidence/<run_id>/intervention.json`:
+
+```
+run_id, kind (discovery | replay), capability_id, goal, step_id, reason_code, reason_text,
+screenshot_path, a11y_snapshot_path, current_url (redacted), suggested_actions (free text),
+requested_at, expires_at
+```
+
+Printed to stdout with the exact resume command.
+
+**Operator CLI** (`cua ops`):
+- `cua ops list` shows paused runs
+- `cua ops show <run_id>` prints the request and opens the screenshot
+- `cua ops take-control <run_id>` flips controller to human, brings the headed browser window to front, starts capturing human actions
+- `cua ops hand-back <run_id> [--note "..."]` flips controller to automation, stops capture, writes the note
+- `cua ops abort <run_id>` finishes the run as `escalated` with reason "operator aborted"
+
+**Human action capture.** While `controller == human`, attach page-level listeners (Playwright `page.on("framenavigated")`, plus an injected `addInitScript` that reports click, input, and change events with the target's role, name, and text through `page.expose_function`). Write to `evidence/<run_id>/human_actions.jsonl`, redacted. On hand-back, the resume logic re-runs the outcome detectors and re-verifies the current step's checkpoint before continuing. The final result carries `recoveries` with a `HumanIntervention` record including the note.
+
+**What is mocked and why**, stated in REPORT.md: the operator sees the real browser window on the same machine. In production this would be a remote view (VNC, CDP screencast, or a browser-in-container with noVNC) and a queue of intervention requests with assignment. The control lock, the state file, the capture, and the resume re-verification are real and are the part that matters.
+
+### 2.10 Evidence
+
+`evidence/<run_id>/`:
+- `run.jsonl`: one line per event: ts, actor (`model` | `replay` | `human` | `policy`), step_id, action, target summary, policy decision, rung used, checkpoint result, detector match, model rationale (discovery only, redacted), duration_ms
+- `step_NN.png` per step
+- `a11y_NN.json` on failure and on escalation
+- `trace.zip` (Playwright trace) on `hard_failure` and `escalated`
+- `intervention.json`, `human_actions.jsonl`, `session_state.json` when relevant
+- `result.json`: the `ReplayResult` or discovery summary
+- `manifest.json`: list of files with sha256 and a `sensitive` flag
+
+`evidence/README.md` at the top level lists every committed run, what it demonstrates, and the command that produced it.
+
+Phase 0 note: Playwright trace zips record network bodies, including the sign-in POST. The leak scan in `tests/test_leaks.py` opens zip members for that reason; the trace writer in phase 4 must keep credentials out of them.
+
+## 6. REPORT.md guidance
+
+Seven headings, exact wording and order from the brief. First person, plain prose, 1 to 3 pages, no bullet spam, no em dashes anywhere. Each section states the decision, the alternative I rejected, and why. Things I want covered:
+
+- **Architecture**: the three-actor model, single process, why Playwright over a CUA SDK (control over the seam, cheaper, the artifact is the product not the SDK), why hybrid perception.
+- **Artifact schema**: why outcome detectors live in the artifact and not the engine (they are app knowledge), why ladders not selectors, why `status` and `tenant_overrides` exist now.
+- **Determinism & error handling**: the determinism sentence, no fixed sleeps, one-match rule, drift signal, the taxonomy with the not_found example, what happens when recovery exhausts.
+- **Heterogeneity & multi-tenant**: the Surface seam; how a legacy web app is the same surface with weaker a11y and heavier reliance on `anchor_relative`; how a desktop surface maps role/name/bounds from OS accessibility APIs and drops `url_matches` detectors for window-title detectors; how one artifact per `app_family` plus `tenant_overrides` avoids re-recording; how drift is detected (rung fallbacks, checkpoint text mismatches, stability runs) and promoted into overrides with a human approving.
+- **Escalation & handoff**: the state machine, the lock, what is mocked (operator view) versus real (control transfer, capture, resume).
+- **Safety**: the gate, risk classes, why `escalate` is the default for irreversible in read-only capabilities, redaction, and the honest limits (no image redaction, no secrets manager, allowlist is a file).
+- **Cuts**: image redaction, remote operator console, assisted LLM fallback on replay, code generation, multi-tenant runtime, desktop implementation. For each, one line on what I would build next and roughly how.

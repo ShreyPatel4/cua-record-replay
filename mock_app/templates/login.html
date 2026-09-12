@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+{# The sign-in screen came from a later vendor patch, so it is the one page with real labels. #}
+<table class="pnl" cellpadding="4" align="center" style="margin-top:40px">
+  <tr><td class="hdr">Operator sign-in</td></tr>
+  {% if expired %}<tr><td class="msg">Your session has expired. Please sign in again.</td></tr>{% endif %}
+  {% if error %}<tr><td class="msg">{{ error }}</td></tr>{% endif %}
+  <tr><td>
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <table>
+        <tr><td><label>Operator ID <input type="text" name="operator" size="16"></label></td></tr>
+        <tr><td><label>Password <input type="password" name="password" size="16"></label></td></tr>
+        <tr><td align="right"><input type="submit" value="Sign in"></td></tr>
+      </table>
+    </form>
+  </td></tr>
+</table>
+{% endblock %}

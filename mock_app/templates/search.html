@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="2">
+  <tr><td class="hdr">Member Lookup</td></tr>
+  <tr><td>
+    <form method="get" action="/members/search">
+      <table class="row">
+        {% if not drift %}
+        <tr>
+          <td class="c1">Member number</td>
+          <td><input type="text" name="q" size="12" maxlength="5" value="{{ q }}"></td>
+          <td><span class="c1 btn" onclick="document.forms[0].submit()">Find</span></td>
+        </tr>
+        {% else %}
+        {# layout_drift: 4.2.2 moved the action under the field and renamed it. #}
+        <tr>
+          <td class="c1">Member number</td>
+          <td><input type="text" name="q" size="12" maxlength="5" value="{{ q }}"></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td align="right"><span class="btn" onclick="document.forms[0].submit()">Search</span></td>
+        </tr>
+        {% endif %}
+        {% if message %}<tr><td colspan="3" class="msg">{{ message }}</td></tr>{% endif %}
+      </table>
+    </form>
+  </td></tr>
+</table>
+{% endblock %}

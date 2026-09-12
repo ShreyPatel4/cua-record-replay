@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="2">
+  <tr><td class="hdr">Sub-account opened</td></tr>
+  <tr><td>
+    <table class="row">
+      <tr><td class="c1">Sub-account number</td><td>{{ sub.number }}</td></tr>
+      <tr><td class="c1">Member</td><td>{{ member.name }} ({{ member.member_id }})</td></tr>
+      <tr><td class="c1">Type</td><td>{{ type_label }}</td></tr>
+      <tr><td class="c1">Nickname</td><td>{{ sub.nickname }}</td></tr>
+      <tr><td class="c1">Initial deposit</td><td class="amt">{{ money(sub.initial_deposit) }}</td></tr>
+    </table>
+  </td></tr>
+  <tr><td><a href="/members/{{ member.member_id }}">Return to member</a></td></tr>
+</table>
+{% endblock %}

@@ -1,0 +1,47 @@
+<html>
+<head>
+<title>CoreLedger failure injection</title>
+<style>
+body { font-family: system-ui, sans-serif; font-size: 14px; margin: 16px; }
+table { border-collapse: collapse; }
+td, th { border: 1px solid #999999; padding: 4px 8px; text-align: left; vertical-align: top; }
+.on { background: #ffe0e0; }
+</style>
+</head>
+<body>
+<h1>Failure injection</h1>
+<p>Dev-only control surface. The automation policy denies this path.
+Sub-accounts opened this session: {{ subaccount_count }}.</p>
+<table>
+  <tr><th>Injection</th><th>Behaviour</th><th>State</th><th>Actions</th></tr>
+  {% for name in names %}
+  {% set a = armed.get(name) %}
+  <tr class="{{ 'on' if a else '' }}">
+    <td>{{ name }}</td>
+    <td>{{ descriptions[name] }}</td>
+    <td>
+      {% if a %}armed{% if a.remaining is not none %}, {{ a.remaining }} left{% endif %}{% if a.params %}, {{ a.params }}{% endif %}{% else %}off{% endif %}
+    </td>
+    <td>
+      <form method="post" action="/__control" style="display:inline">
+        <input type="hidden" name="action" value="arm">
+        <input type="hidden" name="name" value="{{ name }}">
+        <input type="text" name="times" size="3" placeholder="times" aria-label="times for {{ name }}">
+        <input type="text" name="params" size="12" placeholder="k=v;k=v" aria-label="params for {{ name }}">
+        <button type="submit">Arm {{ name }}</button>
+      </form>
+      <form method="post" action="/__control" style="display:inline">
+        <input type="hidden" name="action" value="clear">
+        <input type="hidden" name="name" value="{{ name }}">
+        <button type="submit">Clear {{ name }}</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<form method="post" action="/__control" style="margin-top:12px">
+  <input type="hidden" name="action" value="reset">
+  <button type="submit">Reset all injections and sub-accounts</button>
+</form>
+</body>
+</html>

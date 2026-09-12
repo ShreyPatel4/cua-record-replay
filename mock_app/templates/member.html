@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="pnl" width="100%" cellpadding="2">
+  <tr><td class="hdr" colspan="2">Member profile</td></tr>
+  <tr>
+    <td valign="top">
+      <table class="row">
+        <tr><td class="c1">Name</td><td>{{ member.name }}</td></tr>
+        <tr><td class="c1">Member no</td><td>{{ member.member_id }}</td></tr>
+        <tr><td class="c1">Status</td><td>{{ member.status }}</td></tr>
+        <tr><td class="c1">Branch</td><td>{{ member.branch }}</td></tr>
+        <tr><td class="c1">Joined</td><td>{{ member.joined }}</td></tr>
+      </table>
+    </td>
+    <td valign="top">
+      <table class="pnl">
+        <tr><td class="hdr" colspan="2">Balances</td></tr>
+        <tr><td>
+          <table class="row">
+            <tr><td class="c1">Share Savings</td><td class="amt">{{ money(member.savings) }}</td></tr>
+            <tr><td class="c1">Checking</td><td class="amt">{{ money(member.checking) }}</td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </td>
+  </tr>
+  <tr><td colspan="2">
+    <a href="/members/{{ member.member_id }}/subaccounts/new">Open sub-account</a> |
+    <a href="/members/search">Back to search</a>
+  </td></tr>
+</table>
+{% if interstitial %}
+<div class="shade">
+  <table class="dlg" cellpadding="4">
+    <tr><td class="hdr">System notice</td></tr>
+    <tr><td>Scheduled maintenance tonight 23:00 to 23:30 ET. Posting may be delayed.</td></tr>
+    <tr><td align="right">
+      {% if sticky %}
+      <span class="btn" onclick="void(0)">OK</span>
+      {% else %}
+      <span class="btn" onclick="this.parentNode.parentNode.parentNode.parentNode.parentNode.style.display='none'">OK</span>
+      {% endif %}
+    </td></tr>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

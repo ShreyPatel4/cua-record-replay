@@ -1,0 +1,21 @@
+# secrets and local config
+.env
+.env.*
+!.env.example
+
+# the assignment PDF is interface.ai's document; kept locally, not republished
+docs/brief.pdf
+
+# python tooling
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# scratch runs; curated runs are copied into evidence/ deliberately
+evidence/_scratch/
+.DS_Store
