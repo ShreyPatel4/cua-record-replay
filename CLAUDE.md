@@ -37,6 +37,11 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - Login `next` drops `inject*` params (no redirect loop) and only accepts same-origin paths.
 - `CORELEDGER_ALLOW_QUERY_INJECTION=0` disables `?inject=`. `/__control` is unauthenticated on
   purpose (local mock only); the policy denies it to the agent.
+- Login page has real wrapped `<label>`s and an `<input type=submit>` ("a later vendor patch").
+  Search, detail, and sub-account pages keep role-less spans and tds. Realistic legacy apps are
+  inconsistent, and it gives the ladder a real spread of rungs.
+- `.env.example` leaves `CORELEDGER_OPERATOR_PASSWORD` blank; the app refuses to start without it.
+  No committed file holds a working credential.
 
 ## Open items the phase 1 contracts must settle (from the phase 0 review)
 
@@ -62,11 +67,6 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   frames with frame-prefixed refs (`f2e14`) and supports `boxes=True`. Evaluate it as the ref
   source before building a custom numbering and DOM walk. Unverified: whether `aria-ref=` locators
   resolve inside frames.
-- Login page has real wrapped `<label>`s and an `<input type=submit>` ("a later vendor patch").
-  Search, detail, and sub-account pages keep role-less spans and tds. Realistic legacy apps are
-  inconsistent, and it gives the ladder a real spread of rungs.
-- `.env.example` leaves `CORELEDGER_OPERATOR_PASSWORD` blank; the app refuses to start without it.
-  No committed file holds a working credential.
 
 ---
 
