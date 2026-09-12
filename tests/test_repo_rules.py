@@ -33,3 +33,25 @@ def test_mock_templates_carry_no_stable_selectors() -> None:
     assert templates
     offenders = [t.name for t in templates if attr.search(t.read_text())]
     assert not offenders, f"stable selector attributes in: {offenders}"
+
+
+def test_only_the_gated_surface_calls_surface_act() -> None:
+    """The policy gate is the only path to Surface.act (kickoff test matrix, policy row)."""
+    call = re.compile(r"\.act\(")
+    offenders = [
+        f"{path.relative_to(ROOT)}:{number}"
+        for path in sorted((ROOT / "src").rglob("*.py"))
+        if path.name != "enforce.py"
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if call.search(line)
+    ]
+    assert not offenders, f"Surface.act called outside policy/enforce.py: {offenders}"
+
+
+def test_replay_never_imports_a_model_client() -> None:
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in sorted((ROOT / "src" / "cua" / "replay").rglob("*.py"))
+        if re.search(r"^\s*(import|from)\s+(anthropic|cua\.discover)", path.read_text(), re.M)
+    ]
+    assert not offenders
