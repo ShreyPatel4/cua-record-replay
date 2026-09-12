@@ -40,6 +40,13 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 
 ## Open items the phase 1 contracts must settle (from the phase 0 review)
 
+- `--repeat` vs counted faults: `interstitial`, `session_expired` and friends self-clear after
+  firing, so run 1 of a repeat sees the fault and runs 2 to N do not. The stability report must
+  either re-arm the fault set before each iteration or record the armed-fault snapshot per
+  iteration, so a legitimate difference is never reported as flakiness or drift.
+- Pin the slow-path timing as a test once step timeouts exist:
+  `detail_step_checkpoint_timeout_ms < DEFAULT_SLOW_MS < wait_retry_budget_ms`. Otherwise a later
+  timeout tweak silently makes `od_slow` unreachable and the recovered run passes for the wrong reason.
 - Action enum needs `select_option(ref, label)`: the sub-account form uses a `<select>`, which
   `type_text` cannot drive.
 - `confirm()` must be modelled explicitly. Playwright auto-dismisses unhandled dialogs, so the
