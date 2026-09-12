@@ -1,0 +1,51 @@
+# What the automation may do. Loaded by cua.policy.models.load_policy; one PolicyGate checks every
+# action in discovery and replay.
+#
+# Globs: '*' matches within one path segment, '**' matches any depth. Deny wins over allow.
+# A child policy's lists add to its parent's; irreversible_handling overrides.
+# The gate checks the URL of the frame an action happens in, plus the destination of a navigate.
+policies:
+  coreledger-readonly:
+    description: >-
+      Read member data in CoreLedger. Anything that creates or changes a record needs a human,
+      because a read-only capability that suddenly wants to commit something is off its script.
+    origins:
+      - http://127.0.0.1:5050
+    paths_allow:
+      - /
+      - /banner
+      - /login
+      - /members/search
+      - /members/*
+    paths_deny:
+      - /__control
+      - /__control/**
+      - /admin/**
+      - /logout
+    query_deny:
+      - inject
+      - inject_*
+    actions_allow: [navigate, click, type_text, select_option, press_key, scroll, read_text]
+    risk:
+      irreversible_when:
+        - action: click
+          target_text_matches: "(?i)\\b(create|submit|confirm|delete|transfer|close account)\\b"
+        - dialog_response: accept
+          dialog_message_matches: "(?i)(cannot be undone|are you sure|confirm)"
+      reversible_when:
+        - action: type_text
+        - action: select_option
+    irreversible_handling: escalate
+    sensitive_pages:
+      - /login
+
+  coreledger-subaccount:
+    extends: coreledger-readonly
+    description: >-
+      Open a sub-account for a member. The create click is irreversible and needs
+      --confirm-irreversible on the command line; nothing irreversible happens implicitly.
+    paths_allow:
+      - /members/*/subaccounts/new
+      - /members/*/subaccounts/create
+      - /members/*/subaccounts/*/confirmation
+    irreversible_handling: confirm

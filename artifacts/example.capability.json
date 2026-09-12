@@ -1,0 +1,634 @@
+{
+  "schema_version": "1.0",
+  "capability": {
+    "id": "coreledger.member.read_savings_balance",
+    "version": "1.0.0",
+    "status": "draft",
+    "name": "Read member savings balance",
+    "description": "Sign in to CoreLedger, look up a member by number, and return their current share savings balance.",
+    "created_at": "2026-09-12T14:00:00Z",
+    "policy_ref": "coreledger-readonly"
+  },
+  "surface": {
+    "kind": "web",
+    "entry_url": "http://127.0.0.1:5050/",
+    "app_family": "coreledger",
+    "app_version_hint": "4.2.1"
+  },
+  "secrets": [
+    {
+      "name": "operator_id",
+      "env_var": "CORELEDGER_OPERATOR_USER",
+      "description": "Operator sign-in id. A credential, so it never lives in the artifact."
+    },
+    {
+      "name": "operator_password",
+      "env_var": "CORELEDGER_OPERATOR_PASSWORD",
+      "description": "Operator sign-in password."
+    }
+  ],
+  "inputs": [
+    {
+      "name": "member_id",
+      "type": "string",
+      "description": "Five-digit CoreLedger member number.",
+      "required": true,
+      "pattern": "^[0-9]{5}$",
+      "sensitive": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "savings_balance",
+      "type": "money",
+      "description": "Current share savings balance as shown on the member profile.",
+      "extract": {
+        "target": {
+          "ladder": [
+            {
+              "strategy": "anchor_relative",
+              "anchor_text": "Share Savings",
+              "direction": "right",
+              "same_row": true,
+              "target_kind": "text",
+              "nth": 1,
+              "confidence": 0.9
+            }
+          ],
+          "recorded_rung": 0,
+          "frame_path": [
+            "main"
+          ],
+          "fingerprint": {
+            "role": "cell"
+          },
+          "notes": "The value changes per member, so no text rung can exist. The label cell 'Share Savings' is fixed vendor text and the amount sits in the next cell of the same row. Fingerprint deliberately omits the recorded amount."
+        },
+        "parse": "money_usd"
+      },
+      "sensitive": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "s01",
+      "action": "navigate",
+      "description": "Open the CoreLedger shell; an unauthenticated session shows the sign-in form in the main frame.",
+      "url": "{{surface.entry_url}}",
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_signin_visible",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s02",
+      "action": "type_text",
+      "description": "Enter the operator id.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Operator ID",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Operator ID",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Operator ID"
+        },
+        "notes": "The sign-in page came from a later vendor patch with real wrapped labels, so the accessible name is reliable; the label rung covers a renamed aria name."
+      },
+      "value": "{{secrets.operator_id}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s03",
+      "action": "type_text",
+      "description": "Enter the operator password.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Password",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Password",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Password"
+        },
+        "notes": "Same labelled sign-in form. Because the name matches a credential pattern, the schema only accepts a secrets template here."
+      },
+      "value": "{{secrets.operator_password}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s04",
+      "action": "click",
+      "description": "Submit the sign-in form.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "button",
+            "name": "Sign in",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Password",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.6
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "button",
+          "name": "Sign in"
+        },
+        "notes": "A real submit input, so role and name are strong. The anchor rung is a weak backup: the first clickable below the password field."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_search_ready",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s05",
+      "action": "type_text",
+      "description": "Enter the member number.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Member number",
+            "relation": "same_row",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.85
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1352,
+            "y": 0.0493,
+            "w": 0.0758,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox"
+        },
+        "notes": "No accessible name: the label is a sibling table cell, so role_name is unavailable. Both text rungs key on the 'Member number' label, which the vendor has kept stable across builds. The box was measured at 1280x800 and is a last resort."
+      },
+      "value": "{{inputs.member_id}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s06",
+      "action": "click",
+      "description": "Run the search. The 3 s checkpoint wait is deliberate: a slow profile is handled by od_slow_member_load's bounded wait_retry, not by a long blind wait.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "text_exact",
+            "text": "Find",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.2133,
+            "y": 0.0479,
+            "w": 0.0469,
+            "h": 0.0306,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "cell",
+          "name": "Find",
+          "text": "Find"
+        },
+        "notes": "A span with an onclick handler that the accessibility tree reports only as cell \"Find\", so role_name cannot tell it from a data cell. Exact text is primary. The same-row anchor on the label survives a relabel or a moved cell, and resolving through it on replay raises a drift warning."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_member_loaded",
+        "timeout_ms": 3000
+      },
+      "on_fail": "hard_failure"
+    }
+  ],
+  "checkpoints": {
+    "cp_signin_visible": {
+      "description": "The sign-in form is showing in the main frame.",
+      "condition": {
+        "kind": "text_present",
+        "text": "Operator sign-in",
+        "frame_path": [
+          "main"
+        ]
+      }
+    },
+    "cp_search_ready": {
+      "description": "Signed in, with the member lookup form ready for input.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member Lookup",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "label_text",
+                  "label": "Member number",
+                  "relation": "same_row",
+                  "control": "textbox",
+                  "confidence": 0.9
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "textbox"
+              },
+              "notes": "Same control as s05; presence proves the search form rendered, not just its heading."
+            }
+          }
+        ]
+      }
+    },
+    "cp_member_loaded": {
+      "description": "The member profile is visible and its savings value can be read. A hidden card (for example behind a system notice) does not count.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member profile",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Share Savings",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "text",
+                  "nth": 1,
+                  "confidence": 0.9
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "cell"
+              },
+              "notes": "The output's own target. Requiring it visible makes success mean the value is actually readable."
+            }
+          }
+        ]
+      }
+    }
+  },
+  "outcome_detectors": [
+    {
+      "id": "od_session_expired",
+      "description": "CoreLedger ended the session mid-flow and bounced the main frame to sign-in.",
+      "when": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "url_matches",
+            "pattern": "/login",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "Your session has expired",
+            "frame_path": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "outcome": {
+        "type": "recoverable",
+        "code": "SESSION_EXPIRED",
+        "recovery": {
+          "kind": "run_steps",
+          "step_ids": [
+            "s02",
+            "s03",
+            "s04"
+          ],
+          "max_attempts": 1
+        }
+      }
+    },
+    {
+      "id": "od_app_error",
+      "description": "The server returned its 500 page.",
+      "when": {
+        "kind": "any",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Internal Server Error",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "status_code",
+            "code": 500,
+            "frame_path": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "outcome": {
+        "type": "hard_failure",
+        "code": "APP_ERROR",
+        "escalate": true
+      }
+    },
+    {
+      "id": "od_access_denied",
+      "description": "The operator role is not allowed to open this record.",
+      "when": {
+        "kind": "text_present",
+        "text": "Access denied",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "outcome": {
+        "type": "hard_failure",
+        "code": "PERMISSION_DENIED",
+        "escalate": true
+      }
+    },
+    {
+      "id": "od_member_not_found",
+      "description": "No member has that number. A legitimate answer, not a failure.",
+      "when": {
+        "kind": "text_present",
+        "text": "No member found",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "business_outcome",
+        "code": "MEMBER_NOT_FOUND",
+        "message_from": {
+          "kind": "text_pattern",
+          "pattern": "No member found for member number [0-9*]+\\.",
+          "frame_path": [
+            "main"
+          ]
+        },
+        "field": "member_id"
+      }
+    },
+    {
+      "id": "od_member_number_rejected",
+      "description": "CoreLedger rejected the member number format. Input validation normally catches this first.",
+      "when": {
+        "kind": "text_present",
+        "text": "Member number must be 5 digits",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "business_outcome",
+        "code": "VALIDATION_ERROR",
+        "message_from": {
+          "kind": "text_pattern",
+          "pattern": "Member number must be 5 digits\\.",
+          "frame_path": [
+            "main"
+          ]
+        },
+        "field": "member_id"
+      }
+    },
+    {
+      "id": "od_system_notice",
+      "description": "A maintenance notice covers the profile until acknowledged.",
+      "when": {
+        "kind": "element_present",
+        "target": {
+          "ladder": [
+            {
+              "strategy": "text_exact",
+              "text": "OK",
+              "confidence": 0.6
+            },
+            {
+              "strategy": "anchor_relative",
+              "anchor_text": "System notice",
+              "direction": "below",
+              "same_row": false,
+              "target_kind": "clickable",
+              "nth": 1,
+              "confidence": 0.85
+            }
+          ],
+          "recorded_rung": 0,
+          "frame_path": [
+            "main"
+          ],
+          "fingerprint": {
+            "role": "cell",
+            "name": "OK",
+            "text": "OK"
+          },
+          "notes": "'OK' alone is a common word, so confidence is low; it is only evaluated after s06, where the notice is the only OK on screen."
+        }
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "recoverable",
+        "code": "INTERSTITIAL",
+        "recovery": {
+          "kind": "click",
+          "target": {
+            "ladder": [
+              {
+                "strategy": "text_exact",
+                "text": "OK",
+                "confidence": 0.6
+              },
+              {
+                "strategy": "anchor_relative",
+                "anchor_text": "System notice",
+                "direction": "below",
+                "same_row": false,
+                "target_kind": "clickable",
+                "nth": 1,
+                "confidence": 0.85
+              }
+            ],
+            "recorded_rung": 0,
+            "frame_path": [
+              "main"
+            ],
+            "fingerprint": {
+              "role": "cell",
+              "name": "OK",
+              "text": "OK"
+            },
+            "notes": "Same control as the trigger."
+          },
+          "max_attempts": 2
+        }
+      }
+    },
+    {
+      "id": "od_slow_member_load",
+      "description": "The profile is slower than the step's wait. Keep checking within a bounded budget.",
+      "when": {
+        "kind": "checkpoint_timeout",
+        "checkpoint": "cp_member_loaded"
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "recoverable",
+        "code": "SLOW_LOAD",
+        "recovery": {
+          "kind": "wait_retry",
+          "max_total_ms": 15000,
+          "poll_ms": 500
+        }
+      }
+    }
+  ],
+  "success": {
+    "checkpoint": "cp_member_loaded",
+    "requires_outputs": [
+      "savings_balance"
+    ]
+  },
+  "tenant_overrides": {},
+  "provenance": {
+    "recorded_by": "human",
+    "review_notes": "Hand-written in phase 1 as the target shape for sign-off. Discovery must produce an equivalent artifact from a real run. The two bbox rungs were measured with a Playwright probe at 1280x800."
+  }
+}

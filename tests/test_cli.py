@@ -35,7 +35,6 @@ def test_ops_help_lists_the_control_transfer_commands() -> None:
         ["replay", "artifacts/example.capability.json"],
         ["discover", "--goal", "g", "--target", "http://127.0.0.1:5050/"],
         ["ops", "take-control", "run_x"],
-        ["catalog", "approve", "coreledger.member.read_savings_balance"],
     ],
 )
 def test_unbuilt_commands_exit_nonzero(argv: list[str]) -> None:

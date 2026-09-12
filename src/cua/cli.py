@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 from cua.log import configure_logging
 
+ARTIFACTS_DIR = Path("artifacts")
+
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 ops_app = typer.Typer(no_args_is_help=True, help="Operator commands for paused runs.")
 catalog_app = typer.Typer(no_args_is_help=True, help="Browse and approve saved capabilities.")
@@ -96,22 +98,81 @@ def ops_abort(run_id: str) -> None:
     _not_yet("ops abort", 5)
 
 
+RootOption = Annotated[Path, typer.Option("--root", help="Catalog directory.")]
+
+
 @catalog_app.command("list")
-def catalog_list() -> None:
+def catalog_list(root: RootOption = ARTIFACTS_DIR) -> None:
     """List saved capabilities with version and approval status."""
-    _not_yet("catalog list", 1)
+    from cua.artifact.catalog import Catalog
+
+    entries = Catalog(root).entries()
+    if not entries:
+        typer.echo(f"no capabilities in {root}")
+        return
+    for entry in entries:
+        typer.echo(f"{entry.id}@{entry.version}  {entry.status:<10} {entry.name}")
 
 
 @catalog_app.command("show")
-def catalog_show(capability_id: str) -> None:
-    """Print a capability's contract: inputs, outputs, steps, success condition."""
-    _not_yet("catalog show", 1)
+def catalog_show(
+    capability_id: str,
+    version: Annotated[str | None, typer.Option(help="Defaults to the latest version.")] = None,
+    root: RootOption = ARTIFACTS_DIR,
+) -> None:
+    """Print a capability's caller-facing contract as JSON: inputs, outputs, success, status."""
+    import json
+
+    from cua.artifact.catalog import Catalog, CatalogError
+
+    try:
+        capability, path = Catalog(root).get(capability_id, version)
+    except CatalogError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    contract = {
+        "id": capability.capability.id,
+        "version": capability.capability.version,
+        "status": capability.capability.status,
+        "description": capability.capability.description,
+        "policy": capability.capability.policy_ref,
+        "inputs": [i.model_dump(mode="json", exclude_none=True) for i in capability.inputs],
+        "outputs": [
+            o.model_dump(mode="json", include={"name", "type", "description", "sensitive"})
+            for o in capability.outputs
+        ],
+        "business_outcomes": sorted(
+            {
+                d.outcome.code
+                for d in capability.outcome_detectors
+                if d.outcome.type == "business_outcome"
+            }
+        ),
+        "steps": len(capability.steps),
+        "tenants": sorted(capability.tenant_overrides),
+        "path": str(path),
+    }
+    typer.echo(json.dumps(contract, indent=2))
 
 
 @catalog_app.command("approve")
-def catalog_approve(capability_id: str) -> None:
+def catalog_approve(
+    capability_id: str,
+    by: Annotated[str, typer.Option("--by", help="Who is approving. Recorded in the artifact.")],
+    version: Annotated[str | None, typer.Option(help="Defaults to the latest version.")] = None,
+    root: RootOption = ARTIFACTS_DIR,
+) -> None:
     """Flip a draft capability to approved so unattended replay may run it."""
-    _not_yet("catalog approve", 1)
+    from cua.artifact.catalog import Catalog, CatalogError
+
+    catalog = Catalog(root)
+    try:
+        capability, _ = catalog.get(capability_id, version)
+        path = catalog.approve(capability_id, capability.capability.version, by)
+    except CatalogError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"approved {capability_id}@{capability.capability.version} -> {path}")
 
 
 @mock_app_cli.command("serve")

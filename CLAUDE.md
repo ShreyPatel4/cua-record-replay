@@ -63,10 +63,41 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - Policy draft vs routes: the shell loads `/banner`, so either allow it or gate only agent-initiated
   top-level navigations. Irreversibility cannot key on `/subaccounts/create` (that is the POST
   target, reached only after the act); key it on the form page plus the accepted dialog.
-- Perception source: `page.locator(":root").aria_snapshot(mode="ai")` on Playwright 1.62 walks both
-  frames with frame-prefixed refs (`f2e14`) and supports `boxes=True`. Evaluate it as the ref
-  source before building a custom numbering and DOM walk. Unverified: whether `aria-ref=` locators
-  resolve inside frames.
+- Perception source (verified by probe): `page.locator(":root").aria_snapshot(mode="ai",
+  boxes=True)` walks both frames with frame-prefixed refs (`f2e14`) and boxes, and `aria-ref=`
+  locators resolve and act across frames from the page. Refs are NOT stable: they are reassigned on
+  every snapshot (`f2e14` was the textbox on search and a table row on detail). So a ref is valid
+  only for the snapshot the model saw; the loop re-resolves it and checks role and name before
+  acting, and the recorder builds the ladder in that same turn. Refs never enter an artifact.
+  ai-mode does not mark span/td click handlers (`cell "Find"` has no `[cursor=pointer]`), so a
+  narrow DOM pass is still needed to flag `onclick` targets.
+
+## Phase 1 contract decisions (pushbacks on the kickoff sketch)
+
+- `tenant_overrides` is top level, keyed by tenant id, each with its own `entry_url`, `steps` and
+  `checkpoints` patches. Under `surface` it could only describe one tenant. Patches may not touch a
+  step's `id`, `action`, or `risk` (a tenant must never downgrade risk). Objects deep-merge, lists
+  replace whole (a ladder is one unit). Every tenant is resolved and validated at load.
+- `secrets` block: credentials are `{{secrets.name}}` templates backed by env vars. The schema
+  rejects any literal or non-sensitive value typed into a field whose name looks like a credential,
+  and rejects secrets or sensitive inputs in navigate URLs.
+- Conditions, URL checks, and message sources carry `frame_path`, because the app is a frameset and
+  `page.url` never changes.
+- Detectors have an optional `scope` (step ids) to avoid false positives like a stray "OK".
+  `checkpoint_timeout` is only valid as a detector trigger. Outcomes use a `type` discriminator.
+- `ClickStep.dialog` declares an expected native dialog and the answer; `select_option` exists.
+- Each wait carries its own `timeout_ms`; the member-detail step uses 3000 so `slow` trips recovery.
+- `surface` is a discriminated union `web | desktop`. Desktop is designed, not built, and rejects
+  navigate steps and URL/status conditions.
+- `policy_ref` is a plain policy id. Policy globs: `*` is one segment, `**` any depth; deny wins.
+  The gate checks the acting frame's URL plus a navigate's destination, and uses the higher of the
+  declared and computed risk.
+- Targets carry a `fingerprint` (role, name, redacted text at record time) and `notes` explaining
+  the ladder, which is the brief's "reasoning about robustness" per target.
+- `127.0.0.1` everywhere instead of `localhost` (macOS resolves localhost to ::1 first).
+- `artifacts/example.capability.json` is the hand-written reference; the catalog does not list it
+  but it replays by path. Catalog files are `<id>@<version>.capability.json` and saving enforces
+  semver bump rules against the previous version.
 
 ---
 
