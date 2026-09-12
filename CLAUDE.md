@@ -43,6 +43,19 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - `.env.example` leaves `CORELEDGER_OPERATOR_PASSWORD` blank; the app refuses to start without it.
   No committed file holds a working credential.
 
+## Decisions confirmed at the phase 1 stop (delegated by Shrey on 2026-09-12)
+
+- `artifacts/example.capability.json` as of commit 51ab5b1 is signed off as the target shape.
+- Screens-as-states redesign declined; it is a REPORT.md cut.
+- The no-em-dash rule covers artifacts. The recorder normalizes authored prose (descriptions,
+  notes); CoreLedger pages contain no em dashes, so captured text is never altered in practice.
+- Dev operator id is `teller-0417`, not a dictionary word.
+- Phase 0 deviations stand: restricted member 403 on detail, `slow` 5 s against a 3 s step wait,
+  `docs/brief.pdf` gitignored.
+- Model stays `claude-sonnet-4-6` (kickoff choice, verified with the project key).
+- Discovery runs on the current project key right after phase 2; ask for a fresh key only if it
+  has expired.
+
 ## Settled in phase 1 (the phase 0 review's open items)
 
 - Repeat runs vs self-clearing faults: `IterationSummary.conditions` records the fault set the
