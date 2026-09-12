@@ -1,4 +1,4 @@
-# cua
+# cua-record-replay
 
 Record-once, replay-many computer-use automation for legacy credit union back-office UIs.
 An LLM discovers how to do a task once, the run becomes a typed capability artifact, and
