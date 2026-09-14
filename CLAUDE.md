@@ -325,6 +325,22 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   distribution, duration spread, determinism, HMAC output digests under an in-memory key). It
   exits 0 only when every run passed and the runs are not nondeterministic.
 
+### Carried into phases 5 and 6 from the phase 4 close
+
+- REPORT.md, Determinism and error handling: pre-run refusals (tenant, deprecated, draft, policy,
+  inputs, secrets) stop before a browser opens, so they have no screenshot, snapshot, or trace.
+  The DoD row "hard_failure always has a screenshot, a11y snapshot, and trace" holds for runs
+  that reached the browser only.
+- REPORT.md: `catalog list` shows `@1.0.0` (the discovered draft) and `@1.1.0` (the reviewed,
+  detector-carrying version). Explain that this is discovery then human review, not clutter.
+- `@1.1.0` was approved as Shrey Patel under delegation; re-approve before submission if wanted.
+- `UNEXPECTED_DIALOG` raised from the event drain and a `SETTLE` wait timing out are covered by
+  scripted-surface unit tests only, not live runs.
+- Phase 5 resume re-verifies the interrupted step's checkpoint and re-runs outcome detectors
+  (brief section 2.9); it does not re-run the step's action. `_StepInProgress` carries the step.
+- Phase 5 rewires `no_operator`: permission_denied becomes `escalated` exit 3 with an
+  intervention path, and its committed phase 4 evidence run is replaced.
+
 ### Fixed after the phase 4 review (3 blocking, 6 high, 7 medium, lows and nits)
 
 - Session cookies survived the trace scrub in Playwright's log records (`set-cookie: ...` text).
