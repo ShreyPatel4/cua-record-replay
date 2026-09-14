@@ -34,7 +34,8 @@ class GatedSurface:
 
     confirm_irreversible is the --confirm-irreversible flag: it satisfies RequiresConfirmation under
     `confirm` handling only. `escalate` handling is never satisfied here; the caller must raise an
-    intervention.
+    intervention. perform(confirmed=True) grants the same for one action and the dialog it opens,
+    which is how discovery honours a request_confirmation the run allowed.
     """
 
     def __init__(
@@ -52,18 +53,24 @@ class GatedSurface:
         self._last_action: ActionType = "navigate"
         self._declared: RiskClass = "safe"
         self._target_text: str | None = None
+        self._confirmed_now = False
+        self.last_decision: PolicyDecision | None = None
         surface.install_request_guard(self._request_guard)
 
     def _refusal(self, decision: PolicyDecision) -> str | None:
         if isinstance(decision, Block):
             return decision.reason
         if isinstance(decision, RequiresConfirmation):
-            if decision.handling == "confirm" and self._confirm:
+            if decision.handling == "confirm" and (self._confirm or self._confirmed_now):
                 return None
             return f"requires confirmation ({decision.handling}): {decision.reason}"
         return None
 
-    def perform(self, action: Action, *, declared_risk: RiskClass = "safe") -> ActResult:
+    def perform(
+        self, action: Action, *, declared_risk: RiskClass = "safe", confirmed: bool = False
+    ) -> ActResult:
+        """Judge, then act. last_decision is the gate's answer, or None if it never judged."""
+        self.last_decision = None
         element = getattr(action, "element", None)
         target_text = None
         try:
@@ -85,16 +92,22 @@ class GatedSurface:
             declared_risk=declared_risk,
         )
         decision = self._gate.check(proposed)
+        self.last_decision = decision
+        self._confirmed_now = confirmed
         refusal = self._refusal(decision)
         if refusal is not None:
             code: Literal["POLICY_BLOCKED", "CONFIRMATION_REQUIRED"] = (
                 "POLICY_BLOCKED" if isinstance(decision, Block) else "CONFIRMATION_REQUIRED"
             )
+            self._confirmed_now = False
             return ActResult(ok=False, action=action.kind, code=code, message=refusal)
         self._last_action = action.kind
         self._declared = declared_risk
         self._target_text = target_text
-        return self._surface.act(action, dialog_guard=self._dialog_guard)
+        try:
+            return self._surface.act(action, dialog_guard=self._dialog_guard)
+        finally:
+            self._confirmed_now = False
 
     def _request_guard(self, check: RequestCheck) -> str | None:
         proposed = ProposedAction(

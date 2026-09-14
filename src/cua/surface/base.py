@@ -328,5 +328,7 @@ class Surface(Protocol):
     def frame_status(self, frame_path: Sequence[str]) -> int | None: ...
 
     def settle(self, quiet_ms: int, timeout_ms: int) -> bool:
-        """True once no document, XHR, or fetch request is in flight and the DOM is quiet."""
+        """True once no document, XHR, or fetch request is in flight, none started or finished for
+        quiet_ms (counted from the call, so a navigation an act just fired is waited for), and the
+        DOM is quiet."""
         ...

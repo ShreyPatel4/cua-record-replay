@@ -481,6 +481,23 @@ def test_settle_waits_for_fetches_not_just_documents(
     assert time.monotonic() - started >= 0.7
 
 
+def test_settle_waits_for_a_navigation_that_starts_just_after_the_call(
+    surface: PlaywrightSurface, coreledger: RunningMockApp, mock_settings: MockSettings
+) -> None:
+    """Found by probe: settle returned before a submit's request reached the listener, so the next
+    snapshot still showed the sign-in page. A submit scheduled 100 ms out makes the race certain."""
+    surface.page.goto(coreledger.base_url + "/")
+    main = _main(surface)
+    main.get_by_label("Operator ID").fill(mock_settings.operator_user)
+    main.get_by_label("Password").fill(mock_settings.operator_password)
+    assert surface.settle(quiet_ms=300, timeout_ms=5000)
+    main.evaluate("() => { setTimeout(() => document.forms[0].submit(), 100); }")
+    assert surface.settle(quiet_ms=300, timeout_ms=5000)
+    labels = [n.name or n.text for n in surface.snapshot().nodes if n.frame_path == ["main"]]
+    assert "Member Lookup" in labels
+    assert "Operator sign-in" not in labels
+
+
 def test_reads_refuse_while_a_human_holds_control(
     surface: PlaywrightSurface,
     hand_off: HandOff,

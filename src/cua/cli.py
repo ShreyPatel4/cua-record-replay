@@ -13,6 +13,8 @@ from cua.log import configure_logging
 
 if TYPE_CHECKING:
     from cua.artifact.catalog import Catalog
+    from cua.discover.record import SecretSpec
+    from cua.discover.run import ConfirmParams
 
 ARTIFACTS_DIR = Path("artifacts")
 POLICY_FILE = Path("policy/allowlist.yaml")
@@ -39,20 +41,141 @@ def main(
     configure_logging(log_level)
 
 
+DEFAULT_SECRETS = [
+    "operator_id=CORELEDGER_OPERATOR_USER:identity",
+    "operator_password=CORELEDGER_OPERATOR_PASSWORD:credential",
+]
+
+
+def _secret_specs(raw: list[str]) -> "list[SecretSpec]":
+    from cua.discover.record import SecretSpec
+
+    specs = []
+    for item in raw:
+        name, _, rest = item.partition("=")
+        env_var, _, kind = rest.partition(":")
+        if not name or not env_var or kind not in ("", "credential", "identity"):
+            typer.echo(f"--secret {item!r}: expected name=ENV_VAR[:credential|identity]", err=True)
+            raise typer.Exit(code=1)
+        specs.append(SecretSpec(name=name, env_var=env_var, kind=kind or "credential"))  # type: ignore[arg-type]
+    return specs
+
+
+def _confirm_parameters(assume_yes: bool) -> "ConfirmParams":
+    import re
+
+    from cua.discover.record import ParamProposal
+
+    def confirm(proposals: list[ParamProposal]) -> list[ParamProposal]:
+        accepted = []
+        if not proposals:
+            typer.echo("No typed value matches the goal, so the draft takes no inputs.")
+        for proposal in proposals:
+            steps = ", ".join(f"s{i + 1:02d}" for i in proposal.step_indexes)
+            typer.echo(
+                f"{steps}: typed {proposal.literal!r} into {proposal.label!r}, "
+                "a value the goal names."
+            )
+            if assume_yes:
+                typer.echo(f"  accepted as {{{{inputs.{proposal.name}}}}} (--yes)")
+                accepted.append(proposal)
+                continue
+            if not typer.confirm(
+                f"  Make it the input {{{{inputs.{proposal.name}}}}}?", default=True
+            ):
+                continue
+            name = typer.prompt("  Input name", default=proposal.name)
+            while not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+                name = typer.prompt("  snake_case, starting with a letter", default=proposal.name)
+            accepted.append(ParamProposal(**{**proposal.__dict__, "name": name}))
+        return accepted
+
+    return confirm
+
+
 @app.command()
 def discover(
     goal: Annotated[str, typer.Option(help="Natural language goal.")],
     target: Annotated[str, typer.Option(help="Entry URL of the target application.")],
+    capability_id: Annotated[
+        str, typer.Option(help="Dotted id for the draft: <app_family>.<entity>.<verb_phrase>.")
+    ] = "coreledger.member.discovered_flow",
+    name: Annotated[
+        str | None, typer.Option(help="Short human name. Defaults to the goal.")
+    ] = None,
     policy: Annotated[str, typer.Option(help="Policy id from policy/allowlist.yaml.")] = (
         "coreledger-readonly"
+    ),
+    secret: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="name=ENV_VAR[:credential|identity], repeatable. Defaults to CoreLedger."
+        ),
+    ] = None,
+    app_version: Annotated[str, typer.Option(help="Build the flow is recorded against.")] = (
+        "unknown"
     ),
     max_steps: Annotated[int, typer.Option(min=1)] = 25,
     timeout_s: Annotated[int, typer.Option(min=1)] = 180,
     allow_irreversible: Annotated[bool, typer.Option()] = False,
     headed: Annotated[bool, typer.Option()] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Accept proposed input parameters without prompting.")
+    ] = False,
+    model: Annotated[str | None, typer.Option(help="Defaults to CUA_MODEL.")] = None,
+    evidence_root: Annotated[Path, typer.Option(help="Where the run directory goes.")] = Path(
+        "evidence/_scratch"
+    ),
+    artifacts: Annotated[Path, typer.Option(help="Catalog directory for the draft.")] = (
+        ARTIFACTS_DIR
+    ),
 ) -> None:
     """Run the LLM agent on a goal and record the successful run as a draft capability."""
-    _not_yet("discover", 3)
+    import os
+    import sys
+
+    from cua.discover.model import AnthropicModel
+    from cua.discover.run import DiscoverRequest, DiscoveryError, run_discovery
+    from cua.policy.models import PolicyError
+
+    if not yes and not sys.stdin.isatty():
+        typer.echo(
+            "discovery ends by confirming input parameters; run in a terminal or pass --yes",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        typer.echo(
+            "ANTHROPIC_API_KEY is not set; discovery needs a model. Replay does not.", err=True
+        )
+        raise typer.Exit(code=1)
+    request = DiscoverRequest(
+        goal=goal,
+        entry_url=target,
+        capability_id=capability_id,
+        name=name or goal,
+        policy_id=policy,
+        policy_file=POLICY_FILE,
+        secrets=_secret_specs(secret or DEFAULT_SECRETS),
+        evidence_root=evidence_root,
+        artifacts_root=artifacts,
+        app_version_hint=app_version,
+        max_steps=max_steps,
+        timeout_s=timeout_s,
+        allow_irreversible=allow_irreversible,
+        headed=headed,
+    )
+    client = AnthropicModel(api_key, model or os.environ.get("CUA_MODEL") or "claude-sonnet-4-6")
+    try:
+        result = run_discovery(
+            request, model=client, environ=os.environ, confirm=_confirm_parameters(yes)
+        )
+    except (DiscoveryError, PolicyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(result.model_dump_json(indent=2))
+    raise typer.Exit(code=0 if result.status == "recorded" else 2)
 
 
 @app.command()

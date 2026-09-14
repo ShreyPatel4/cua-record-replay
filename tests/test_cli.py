@@ -33,13 +33,33 @@ def test_ops_help_lists_the_control_transfer_commands() -> None:
     "argv",
     [
         ["replay", "artifacts/example.capability.json"],
-        ["discover", "--goal", "g", "--target", "http://127.0.0.1:5050/"],
         ["ops", "take-control", "run_x"],
     ],
 )
 def test_unbuilt_commands_exit_nonzero(argv: list[str]) -> None:
     result = runner.invoke(app, argv)
     assert result.exit_code == 1
+
+
+DISCOVER = ["discover", "--goal", "g", "--target", "http://127.0.0.1:5050/"]
+
+
+def test_discover_refuses_to_run_unattended_without_yes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It ends by asking a human to confirm parameters, which needs a terminal or --yes."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    result = runner.invoke(app, DISCOVER)
+    assert result.exit_code == 1
+    assert "--yes" in result.output
+
+
+def test_discover_without_an_api_key_says_replay_does_not_need_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An empty value blocks load_dotenv from filling the key in from a developer's .env.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    result = runner.invoke(app, [*DISCOVER, "--yes"])
+    assert result.exit_code == 1
+    assert "ANTHROPIC_API_KEY is not set" in result.output
 
 
 def test_mock_smoke_passes_against_a_live_server(

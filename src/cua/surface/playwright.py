@@ -144,6 +144,7 @@ class PlaywrightSurface:
         self._acting_frame_url = ""
         self._events: list[SurfaceEvent] = []
         self._inflight: set[Request] = set()
+        self._last_network = time.monotonic()
         self._answered_by_guard: set[Request] = set()
         self._status: dict[Frame, int] = {}
         self._synthetic: dict[str, Element] = {}
@@ -247,6 +248,7 @@ class PlaywrightSurface:
     def _on_request(self, request: Request) -> None:
         if request.resource_type in _SETTLE_TYPES:
             self._inflight.add(request)
+            self._last_network = time.monotonic()
         previous = request.redirected_from
         if previous is None:
             return
@@ -260,7 +262,9 @@ class PlaywrightSurface:
             self._emit("redirect_off_policy", reason, request.url)
 
     def _on_request_done(self, request: Request) -> None:
-        self._inflight.discard(request)
+        if request in self._inflight:
+            self._inflight.discard(request)
+            self._last_network = time.monotonic()
 
     def _on_response(self, response: Response) -> None:
         request = response.request
@@ -540,9 +544,13 @@ class PlaywrightSurface:
 
     def settle(self, quiet_ms: int, timeout_ms: int) -> bool:
         self._control()
-        deadline = time.monotonic() + timeout_ms / 1000
+        started = time.monotonic()
+        deadline = started + timeout_ms / 1000
         while True:
-            if not self._inflight and self._quiet_ms() >= quiet_ms:
+            # The call itself counts as activity: a submit an act just fired reaches the request
+            # listener a moment later, and an idle page before that is not a settled one.
+            idle_ms = (time.monotonic() - max(started, self._last_network)) * 1000
+            if not self._inflight and idle_ms >= quiet_ms and self._quiet_ms() >= quiet_ms:
                 return True
             if time.monotonic() >= deadline:
                 return False

@@ -1,0 +1,286 @@
+"""Discovery pieces that need no browser: stuck detection, retry-once, SDK mapping, parameters.
+
+Also output parsing and the evidence writer, which discovery is the first caller of.
+"""
+
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import anthropic
+import httpx2
+import pytest
+
+from cua.artifact.schema import Fingerprint, LabelTextRung, Target
+from cua.discover.loop import StuckDetector, ask_with_one_retry
+from cua.discover.model import (
+    AnthropicModel,
+    ModelError,
+    ModelTurn,
+    TransientModelError,
+    turn_from_message,
+)
+from cua.discover.record import DiscoveryRecord, ObservedStep, propose_parameters
+from cua.evidence.writer import EvidenceWriter
+from cua.locate.recorder import Recording
+from cua.policy.redact import Redactor
+from cua.replay.extract import ExtractionError, parse_value
+from cua.replay.result import DateValue, MoneyValue
+from cua.surface.base import A11ySnapshot
+
+REQUEST = httpx2.Request("POST", "https://api.invalid/v1/messages")
+
+
+def test_the_same_call_three_times_running_is_stuck() -> None:
+    stuck = StuckDetector()
+    click = (("ref", "Find"), ("tool", "click"))
+    assert stuck.note_call(click) is None
+    assert stuck.note_call(click) is None
+    assert stuck.note_call(click) == "repeated_action"
+
+
+def test_a_different_call_in_between_resets_the_repeat_count() -> None:
+    stuck = StuckDetector()
+    click, read = (("tool", "click"),), (("tool", "read_text"),)
+    for key in (click, click, read, click, click):
+        assert stuck.note_call(key) is None
+
+
+def test_two_actions_in_a_row_that_change_nothing_are_stuck() -> None:
+    stuck = StuckDetector()
+    assert stuck.note_act("a", "b") is None
+    assert stuck.note_act("b", "b") is None
+    assert stuck.note_act("b", "c") is None, "a change resets the count"
+    assert stuck.note_act("c", "c") is None
+    assert stuck.note_act("c", "c") == "no_progress"
+
+
+def _turn() -> ModelTurn:
+    return ModelTurn(text="", tool_uses=[], stop_reason="tool_use")
+
+
+def test_a_transient_model_error_is_retried_exactly_once() -> None:
+    calls: list[str] = []
+    retries: list[str] = []
+
+    def flaky() -> ModelTurn:
+        calls.append("call")
+        if len(calls) == 1:
+            raise TransientModelError("overloaded")
+        return _turn()
+
+    assert ask_with_one_retry(flaky, retries.append) == _turn()
+    assert len(calls) == 2
+    assert retries == ["overloaded"]
+
+
+def test_a_second_transient_error_fails_the_call() -> None:
+    calls: list[str] = []
+
+    def down() -> ModelTurn:
+        calls.append("call")
+        raise TransientModelError("still down")
+
+    with pytest.raises(TransientModelError):
+        ask_with_one_retry(down, lambda _: None)
+    assert len(calls) == 2
+
+
+def test_a_permanent_model_error_is_not_retried() -> None:
+    calls: list[str] = []
+
+    def refused() -> ModelTurn:
+        calls.append("call")
+        raise ModelError("HTTP 400")
+
+    with pytest.raises(ModelError):
+        ask_with_one_retry(refused, lambda _: None)
+    assert calls == ["call"]
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (anthropic.APIConnectionError(request=REQUEST), TransientModelError),
+        (anthropic.APITimeoutError(request=REQUEST), TransientModelError),
+        (
+            anthropic.APIStatusError(
+                "overloaded", response=httpx2.Response(529, request=REQUEST), body=None
+            ),
+            TransientModelError,
+        ),
+        (
+            anthropic.APIStatusError(
+                "server", response=httpx2.Response(500, request=REQUEST), body=None
+            ),
+            TransientModelError,
+        ),
+        (
+            anthropic.APIStatusError(
+                "bad request", response=httpx2.Response(400, request=REQUEST), body=None
+            ),
+            ModelError,
+        ),
+        (
+            anthropic.APIStatusError(
+                "unauthorized", response=httpx2.Response(401, request=REQUEST), body=None
+            ),
+            ModelError,
+        ),
+    ],
+)
+def test_sdk_errors_map_to_retryable_or_not(
+    monkeypatch: pytest.MonkeyPatch, raised: Exception, expected: type[Exception]
+) -> None:
+    model = AnthropicModel("test-key-not-real", "claude-sonnet-4-6")
+
+    def create(**_: Any) -> Any:
+        raise raised
+
+    monkeypatch.setattr(model._client.messages, "create", create)
+    with pytest.raises(expected):
+        model.complete(system="s", tools=[], messages=[])
+
+
+def test_a_response_becomes_text_tool_uses_and_replayable_content() -> None:
+    message = SimpleNamespace(
+        content=[
+            SimpleNamespace(type="text", text=" Sign in first. "),
+            SimpleNamespace(type="tool_use", id="toolu_1", name="click", input={"ref": "f2e21"}),
+        ],
+        stop_reason="tool_use",
+        usage=SimpleNamespace(input_tokens=1200, output_tokens=40),
+    )
+    turn = turn_from_message(message)
+    assert turn.text == "Sign in first."
+    assert [(u.id, u.name, u.input) for u in turn.tool_uses] == [
+        ("toolu_1", "click", {"ref": "f2e21"})
+    ]
+    assert turn.content[1] == {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "click",
+        "input": {"ref": "f2e21"},
+    }
+    assert (turn.input_tokens, turn.output_tokens) == (1200, 40)
+
+
+@pytest.mark.parametrize(
+    ("text", "parse", "value"),
+    [
+        ("$4,210.55", "money_usd", MoneyValue(amount=Decimal("4210.55"), currency="USD")),
+        (" $ 12 ", "money_usd", MoneyValue(amount=Decimal("12"), currency="USD")),
+        ("-$3.10", "money_usd", MoneyValue(amount=Decimal("-3.10"), currency="USD")),
+        ("($3.10)", "money_usd", MoneyValue(amount=Decimal("-3.10"), currency="USD")),
+        ("1,204", "integer", 1204),
+        ("2012-09-05", "date_iso", DateValue.model_validate({"value": "2012-09-05"})),
+        ("  Gray   Wrenfield ", "text", "Gray Wrenfield"),
+    ],
+)
+def test_visible_text_parses_into_typed_outputs(text: str, parse: Any, value: object) -> None:
+    assert parse_value(text, parse) == value
+
+
+@pytest.mark.parametrize(
+    ("text", "parse"),
+    [
+        ("Share Savings", "money_usd"),
+        ("4210.55", "money_usd"),
+        ("($3.10", "money_usd"),
+        ("12a", "integer"),
+        ("09/05/2012", "date_iso"),
+        ("   ", "text"),
+    ],
+)
+def test_unparseable_text_fails_without_echoing_it(text: str, parse: Any) -> None:
+    with pytest.raises(ExtractionError) as caught:
+        parse_value(text, parse)
+    assert text.strip() == "" or text not in str(caught.value)
+
+
+EMPTY = A11ySnapshot(nodes=[], frame_urls={})
+
+
+def _field(label: str) -> Recording:
+    target = Target(
+        ladder=[
+            LabelTextRung(
+                strategy="label_text",
+                label=label,
+                relation="same_row",
+                control="textbox",
+                confidence=0.9,
+            )
+        ],
+        recorded_rung=0,
+        frame_path=["main"],
+        fingerprint=Fingerprint(role="textbox", kind="input"),
+        notes="test field",
+    )
+    return Recording(target=target, weak=False, dropped=())
+
+
+def _typed(value: str, label: str) -> ObservedStep:
+    return ObservedStep("type_text", "reversible", EMPTY, EMPTY, target=_field(label), value=value)
+
+
+def test_only_literals_the_goal_names_are_proposed_as_inputs() -> None:
+    record = DiscoveryRecord(
+        goal="Log in, look up member 10007 and read their current savings balance",
+        entry_url="http://127.0.0.1:5050/",
+        summary="done",
+        steps=[
+            _typed("{{secrets.operator_id}}", "operator id"),
+            _typed("10007", "member number"),
+            _typed("branch-7", "branch code"),
+            _typed("10007", "member number"),
+        ],
+        outputs=[],
+        checkpoint_target=_field("member number"),
+    )
+    proposals = propose_parameters(record)
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert (proposal.literal, proposal.name, proposal.pattern) == (
+        "10007",
+        "member_number",
+        "^[0-9]{5}$",
+    )
+    assert proposal.step_indexes == (1, 3)
+
+
+def test_a_literal_inside_a_longer_word_is_not_a_parameter() -> None:
+    record = DiscoveryRecord(
+        goal="look up member 100071",
+        entry_url="http://127.0.0.1:5050/",
+        summary="done",
+        steps=[_typed("10007", "member number")],
+        outputs=[],
+        checkpoint_target=_field("member number"),
+    )
+    assert propose_parameters(record) == []
+
+
+def test_evidence_is_redacted_and_the_manifest_flags_sign_in_screenshots(tmp_path: Path) -> None:
+    redactor = Redactor(["planted-password-123"], identities=["teller-0417"])
+    writer = EvidenceWriter(tmp_path, "disc_test", redactor, sensitive_pages=["/login"])
+    writer.event(
+        "model",
+        "model_turn",
+        rationale="teller-0417 types planted-password-123 for member 10007",
+        arguments={"text": "planted-password-123", "amount": 12345},
+    )
+    writer.screenshot("step_00.png", b"\x89PNG login", page_urls=["http://h/", "http://h/login"])
+    writer.screenshot("step_01.png", b"\x89PNG search", page_urls=["http://h/members/search"])
+    manifest = json.loads(writer.finish().read_text())
+
+    line = json.loads((tmp_path / "disc_test" / "run.jsonl").read_text())
+    assert line["rationale"] == "[REDACTED] types [REDACTED] for member *0007"
+    assert line["arguments"] == {"text": "[REDACTED]", "amount": 12345}
+    flags = {f["path"]: f["sensitive"] for f in manifest["files"]}
+    assert flags == {"run.jsonl": False, "step_00.png": True, "step_01.png": False}
+    assert all(len(f["sha256"]) == 64 for f in manifest["files"])
