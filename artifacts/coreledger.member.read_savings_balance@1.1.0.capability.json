@@ -593,7 +593,7 @@
     },
     {
       "id": "od_app_error",
-      "description": "The server returned its 500 page. A human can often clear the cause and send the run on.",
+      "description": "The server returned its 500 page. A human can often clear the cause and send the run on. Unscoped: any page, sign-in and re-run steps included, can return it.",
       "when": {
         "kind": "any",
         "conditions": [
@@ -621,7 +621,7 @@
     },
     {
       "id": "od_access_denied",
-      "description": "The operator role is not allowed to open this record.",
+      "description": "The operator role is not allowed to open this record. Unscoped for the same reason: any page can refuse the operator's role.",
       "when": {
         "kind": "text_present",
         "text": "Access denied",

@@ -33,6 +33,7 @@ PRE_RUN_CODES = frozenset(
     {
         "INPUT_INVALID",
         "DRAFT_NOT_APPROVED",
+        "CAPABILITY_DEPRECATED",
         "TENANT_UNKNOWN",
         "SECRET_MISSING",
         "POLICY_MISMATCH",

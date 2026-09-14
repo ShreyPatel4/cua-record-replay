@@ -91,6 +91,9 @@ class DesktopSurface:
     def stop_trace(self, path: Path | None) -> bool:
         self._unbuilt()
 
+    def session_tokens(self) -> list[str]:
+        self._unbuilt()
+
     def candidates(self, rung: Rung, frame_path: Sequence[str]) -> list[Element]:
         self._unbuilt()
 

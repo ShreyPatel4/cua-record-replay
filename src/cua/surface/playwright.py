@@ -1,7 +1,6 @@
 """PlaywrightSurface: Chromium through Playwright, frame-aware, with the gate on every request.
 
-Rung matching runs as one script per frame (locator.js), so a rung means the same thing when the
-recorder writes it and when the resolver replays it.
+Rungs match through one script per frame (locator.js), shared by the recorder and the resolver.
 """
 
 from __future__ import annotations
@@ -581,8 +580,8 @@ class PlaywrightSurface:
         self.page.wait_for_timeout(ms)
 
     def start_trace(self) -> None:
-        """Screenshots and DOM snapshots, no sources. Callers start it after sign-in and scrub the
-        archive anyway: traces keep request bodies and input values."""
+        """Screenshots and DOM snapshots, no sources. Traces keep request bodies, headers, and
+        input values, so a caller scrubs the archive before it goes anywhere."""
         if not self._tracing:
             self._context.tracing.start(screenshots=True, snapshots=True, sources=False)
             self._tracing = True
@@ -596,6 +595,9 @@ class PlaywrightSurface:
         else:
             self._context.tracing.stop(path=str(path))
         return True
+
+    def session_tokens(self) -> list[str]:
+        return [c["value"] for c in self._context.cookies() if c.get("value")]
 
     def _quiet_ms(self) -> float:
         quiet = float("inf")

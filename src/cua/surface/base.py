@@ -347,3 +347,8 @@ class Surface(Protocol):
         """Stop recording; write the trace to path, or discard it when path is None. False when
         no trace was running."""
         ...
+
+    def session_tokens(self) -> list[str]:
+        """Values the app holds the session with right now (cookies on the web), so evidence
+        such as a trace can be scrubbed of them."""
+        ...

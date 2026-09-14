@@ -83,8 +83,11 @@ class EvidenceWriter:
         """Mark a file sensitive after the fact, such as a screenshot showing a sensitive output."""
         self._sensitive.add(name)
 
-    def snapshot(self, name: str, snapshot: A11ySnapshot) -> str:
-        data = snapshot.redacted(self._redactor.text).model_dump(mode="json")
+    def snapshot(self, name: str, snapshot: A11ySnapshot, *, mask_amounts: bool = False) -> str:
+        """mask_amounts also hides dollar amounts, for a screen that may show a sensitive output
+        the run has not read, so its exact value is not known to the redactor."""
+        redact = self._redactor.free_text if mask_amounts else self._redactor.text
+        data = snapshot.redacted(redact).model_dump(mode="json")
         return self.write_json(name, data)
 
     def write_json(self, name: str, data: Any) -> str:

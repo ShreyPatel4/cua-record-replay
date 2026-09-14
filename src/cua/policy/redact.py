@@ -34,32 +34,37 @@ _NUMBER_RE = re.compile(
     r")"
     r"|(?<![0-9])(?P<digits>[0-9]{5,})(?![0-9])"
 )
-_WORD_CHARS = "A-Za-z0-9"
 # Money in prose someone wrote about the screen: masked there, kept in app text and messages.
 _AMOUNT_RE = re.compile(
     r"\$\s?[0-9][0-9,]*(?:\.[0-9]+)?"
     r"|(?<![0-9])[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?(?![0-9])"
     r"|(?<![0-9.])[0-9]+\.[0-9]{2}(?![0-9])"
 )
-
-
 _MONEY_FORM_RE = re.compile(
     r"\(?-?\s*\$\s?(?P<num>[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?P<frac>\.[0-9]{2})?\)?"
 )
+# A whole token: not inside a word, and not one part of a longer number such as 4.0.00 or 1,15.00.
+_BEFORE = r"(?<![A-Za-z0-9])(?<![0-9][.,])"
+_AFTER = r"(?![A-Za-z0-9])(?![.,][0-9])"
 
 
-def _token_pattern(tokens: set[str]) -> re.Pattern[str] | None:
+def _token_patterns(tokens: set[str]) -> tuple[re.Pattern[str], re.Pattern[bytes]] | None:
     if not tokens:
         return None
-    alternation = "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True))
-    return re.compile(f"(?<![{_WORD_CHARS}])(?:{alternation})(?![{_WORD_CHARS}])")
+    ordered = sorted(tokens, key=len, reverse=True)
+    text = "|".join(re.escape(t) for t in ordered)
+    raw = b"|".join(re.escape(t.encode()) for t in ordered)
+    return (
+        re.compile(f"{_BEFORE}(?:{text}){_AFTER}"),
+        re.compile(_BEFORE.encode() + b"(?:" + raw + b")" + _AFTER.encode()),
+    )
 
 
 def mask_account_number(digits: str) -> str:
     return "*" * (len(digits) - 4) + digits[-4:]
 
 
-def base64_forms(raw: bytes) -> set[str]:
+def base64_forms(raw: bytes, min_len: int = SUBSTRING_MIN_LEN) -> set[str]:
     """The characters of a value's base64 that are fixed whatever bytes surround it.
 
     A value can start at any of three byte offsets inside a longer base64 stream, and the chars
@@ -69,9 +74,13 @@ def base64_forms(raw: bytes) -> set[str]:
     for offset in range(3):
         encoded = base64.b64encode(b"\0" * offset + raw).decode()
         core = encoded[-(-8 * offset // 6) : (8 * (offset + len(raw))) // 6]
-        if len(core) >= SUBSTRING_MIN_LEN:
+        if len(core) >= min_len:
             forms |= {core, core.replace("+", "-").replace("/", "_")}
     return forms
+
+
+def _text_forms(value: str) -> set[str]:
+    return {value, quote(value, safe=""), quote_plus(value), json.dumps(value)[1:-1]}
 
 
 def _check_length(value: str) -> None:
@@ -89,26 +98,17 @@ class Redactor:
         identities: Iterable[str] = (),
         mask_account_numbers: bool = True,
     ) -> None:
-        substrings: set[str] = set()
-        tokens: set[str] = set()
+        self._substrings: list[str] = []
+        self._token_values: set[str] = set()
+        self._patterns: tuple[re.Pattern[str], re.Pattern[bytes]] | None = None
+        self._mask_accounts = mask_account_numbers
         for secret in secrets:
-            _check_length(secret)
-            if len(secret) < SUBSTRING_MIN_LEN:
-                tokens.add(secret)
-                continue
-            substrings |= {secret, quote(secret, safe=""), quote_plus(secret)}
-            substrings |= {json.dumps(secret)[1:-1]} | base64_forms(secret.encode())
+            self.add_credential(secret)
         for identity in identities:
             _check_length(identity)
-            tokens |= {identity, quote(identity, safe=""), quote_plus(identity)}
             # Base64 of an identity is gibberish, so matching it anywhere cannot over-redact, and
-            # traces store some captured values base64-encoded.
-            substrings |= base64_forms(identity.encode())
-        # Longest first so an encoded form containing a raw form is replaced whole.
-        self._substrings = sorted(substrings, key=len, reverse=True)
-        self._token_values = tokens
-        self._tokens = _token_pattern(tokens)
-        self._mask_accounts = mask_account_numbers
+            # traces store some captured values (request bodies) base64-encoded.
+            self._add(tokens=_text_forms(identity), substrings=base64_forms(identity.encode()))
 
     @classmethod
     def from_env(
@@ -123,28 +123,50 @@ class Redactor:
             identities=[source[name] for name in identity_env_vars if source.get(name)],
         )
 
+    def _add(self, *, tokens: Iterable[str] = (), substrings: Iterable[str] = ()) -> None:
+        new_tokens = {t for t in tokens if t} - self._token_values
+        new_substrings = {s for s in substrings if s} - set(self._substrings)
+        if new_substrings:
+            # Longest first so an encoded form containing a raw form is replaced whole.
+            self._substrings = sorted({*self._substrings, *new_substrings}, key=len, reverse=True)
+        if new_tokens:
+            self._token_values = self._token_values | new_tokens
+            self._patterns = _token_patterns(self._token_values)
+
+    def add_credential(self, value: str) -> None:
+        """A password, token, or session cookie: every text and base64 form, from now on."""
+        _check_length(value)
+        # A short credential's base64 cores are short too; over-redacting a trace is cheap.
+        encoded = base64_forms(value.encode(), MIN_SECRET_LEN)
+        if len(value) < SUBSTRING_MIN_LEN:
+            self._add(tokens=_text_forms(value), substrings=encoded)
+        else:
+            self._add(substrings=_text_forms(value) | encoded)
+
     def add_secret(self, value: str) -> None:
         """Mask a value learned during a run, such as a sensitive output, from now on.
 
         Matched as a whole token, so a balance of 15.00 never eats into 115.00 or 05:18:15.004.
         """
         _check_length(value)
-        self._token_values = self._token_values | {value}
-        self._tokens = _token_pattern(self._token_values)
+        self._add(tokens={value})
 
     def add_value(self, text: str) -> None:
         """Mask a sensitive value read off the screen, plus the bare number forms of an amount,
-        so "$4,210.55" also hides "4,210.55" and "4210.55". Forms too short to redact are skipped.
+        so "$4,210.55" also hides "4,210.55" and "4210.55". A dollar form is masked at any length
+        ("$5"); bare forms shorter than four characters are not, or every "100" would vanish.
         """
         shown = " ".join(text.split())
+        if not shown:
+            return
         forms = {shown}
         match = _MONEY_FORM_RE.fullmatch(shown)
         if match is not None:
             number, frac = match.group("num"), match.group("frac") or ""
-            forms |= {number + frac, number.replace(",", "") + frac}
-        for form in forms:
-            if len(form) >= MIN_SECRET_LEN:
-                self.add_secret(form)
+            forms |= {f"${number}{frac}", number + frac, number.replace(",", "") + frac}
+        self._add(
+            tokens={f for f in forms if f.startswith(("$", "(", "-")) or len(f) >= MIN_SECRET_LEN}
+        )
 
     def scrub_bytes(self, data: bytes) -> bytes:
         """Replace secret values, in every encoding the redactor knows, inside raw bytes.
@@ -154,12 +176,8 @@ class Redactor:
         """
         for form in self._substrings:
             data = data.replace(form.encode(), REDACTED.encode())
-        if self._token_values:
-            alternation = b"|".join(
-                re.escape(t.encode()) for t in sorted(self._token_values, key=len, reverse=True)
-            )
-            pattern = re.compile(rb"(?<![A-Za-z0-9])(?:" + alternation + rb")(?![A-Za-z0-9])")
-            data = pattern.sub(REDACTED.encode(), data)
+        if self._patterns is not None:
+            data = self._patterns[1].sub(REDACTED.encode(), data)
         return data
 
     def free_text(self, value: str) -> str:
@@ -169,8 +187,8 @@ class Redactor:
     def text(self, value: str) -> str:
         for form in self._substrings:
             value = value.replace(form, REDACTED)
-        if self._tokens is not None:
-            value = self._tokens.sub(REDACTED, value)
+        if self._patterns is not None:
+            value = self._patterns[0].sub(REDACTED, value)
         if self._mask_accounts:
             value = _NUMBER_RE.sub(
                 lambda m: m.group("keep") or mask_account_number(m.group("digits")), value

@@ -71,13 +71,18 @@ from cua.surface.base import (
     SurfaceError,
     TypeText,
 )
-from cua.vocab import RiskClass
+from cua.vocab import RiskClass, max_risk
 
 T = TypeVar("T")
 StopStatus = Literal["business_outcome", "hard_failure", "escalated"]
 # Outputs sit on the screen the success checkpoint just verified, so they get a short grace only.
 OUTPUT_TIMEOUT_MS = 2000
 RECOVERY_SETTLE_MS = 300
+# What a re-run step can fail with that means "the recovery did not work", so the recovering
+# detector's code is reported. Anything a detector recognizes, or a policy block, keeps its own.
+_RECOVERY_STEP_FAILURES = frozenset(
+    {"TARGET_NOT_FOUND", "TARGET_AMBIGUOUS", "CHECKPOINT_TIMEOUT", "ACTION_FAILED"}
+)
 
 
 class Clock(Protocol):
@@ -115,6 +120,7 @@ class RunStopped(Exception):
         observed: str,
         status: StopStatus = "hard_failure",
         field_errors: tuple[FieldError, ...] = (),
+        intervention_path: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -123,15 +129,17 @@ class RunStopped(Exception):
         self.observed = observed
         self.status = status
         self.field_errors = field_errors
+        self.intervention_path = intervention_path
 
 
+# An escalation handler gets the stop that asked for a human and why, and returns how the run
+# ends: an escalated stop carrying its intervention_path, or a hard failure when nobody can come.
 Escalation = Callable[[RunStopped, ReasonCode], RunStopped]
 
 
 def no_operator(stop: RunStopped, reason: ReasonCode) -> RunStopped:
-    """What an escalation becomes when no operator channel is attached to the run: a hard failure
-    that keeps the escalating code. The session controller replaces this with a pause for a human.
-    """
+    """The handler when no operator channel is attached: a hard failure that keeps the escalating
+    code and says a human is needed."""
     return RunStopped(
         stop.code,
         f"{stop.message} This needs a human ({reason}), but no operator channel is attached, so "
@@ -150,14 +158,23 @@ class _OpenRecovery:
     window_ends: float | None = None
 
 
+@dataclass
+class _StepInProgress:
+    step: Step
+    started: float
+    attempts: int = 0
+    resolved: Resolved | None = None
+
+
 class ReplayEngine:
     """One run of one tenant-resolved capability over a gated surface.
 
     Every wait is a poll loop. Each tick drains surface events (a refused request or an unexpected
     dialog stops the run), evaluates the step's in-scope detectors in artifact order, then the
     wait's own condition. checkpoint_timeout detectors are evaluated once per deadline. A click or
-    run_steps recovery restarts the interrupted wait with its full timeout; a wait_retry recovery
-    keeps polling the same wait for its budget, with its own trigger set aside.
+    run_steps recovery restarts the interrupted wait with its full timeout, and owns the failure if
+    that wait still never verifies. A wait_retry recovery keeps polling for its budget with its own
+    trigger set aside. Attempts are counted per step and detector across all of a step's waits.
     """
 
     def __init__(
@@ -195,8 +212,10 @@ class ReplayEngine:
         self._steps_by_id = {s.id: s for s in capability.steps}
         self._index = 1
         self._reached: str | None = None
+        self._current: _StepInProgress | None = None
         self._records: list[StepRecord] = []
         self._recoveries: list[RecoveryRecord] = []
+        self._attempts: dict[tuple[str, str], int] = {}
         self._warnings: list[ReplayWarning] = []
         self._warned: set[tuple[str, str, int]] = set()
         self._shows_sensitive = False
@@ -231,6 +250,7 @@ class ReplayEngine:
                 self._run_step(step, index=index)
             outputs = self._finish()
         except RunStopped as stop:
+            self._record_unfinished_step()
             self._capture(failed=True)
             result = self._result(begin, stop=stop)
         else:
@@ -268,6 +288,7 @@ class ReplayEngine:
             "evidence_dir": str(self._evidence.dir),
         }
         if stop is None:
+            # A finished run has only verified recoveries: an unverified one always ends the run.
             status = "recovered_then_success" if self._recoveries else "success"
             return ReplayResult(status=status, outputs=outputs or {}, **common)
         return ReplayResult(
@@ -277,6 +298,7 @@ class ReplayEngine:
             field_errors=list(stop.field_errors),
             expected=self._redactor.text(stop.expected) or None,
             observed=self._redactor.text(stop.observed) or None,
+            intervention_path=stop.intervention_path,
             **common,
         )
 
@@ -285,11 +307,12 @@ class ReplayEngine:
     def _run_step(self, step: Step, *, index: int | None = None, skip_wait: bool = False) -> None:
         """A step from the flow (index given) or one re-run by a recovery (index None)."""
         rerun = index is None
+        begin = self._clock.now()
+        progress = _StepInProgress(step, begin)
         if index is not None:
-            self._index, self._reached = index, step.id
+            self._index, self._reached, self._current = index, step.id, progress
         if step.id == self._success_step and self._sensitive_outputs:
             self._shows_sensitive = True
-        begin = self._clock.now()
         self._log(
             "step_started",
             step_id=step.id,
@@ -299,16 +322,31 @@ class ReplayEngine:
         )
         target = getattr(step, "target", None)
         timeout_ms = step.wait_for.timeout_ms
-        resolved: Resolved | None = None
-        attempts = 0
         while True:
-            attempts += 1
+            progress.attempts += 1
             if target is not None:
-                resolved = self._resolve(step, target, "step", timeout_ms)
-            act = self._perform(step.id, self._action(step, resolved), step.risk)
+                progress.resolved = self._resolve(step, target, "step", timeout_ms)
+            action = self._action(step, progress.resolved)
+            risk = self._effective_risk(step, action)
+            changed = progress.resolved is not None and progress.resolved.identity_changed
+            if changed and risk == "irreversible":
+                raise self._step_failure(
+                    step,
+                    "TARGET_CHANGED",
+                    f"step {step.id} is irreversible and its target no longer looks like the "
+                    "recorded element, so replay will not act on it",
+                    expected=f"the recorded element {target.fingerprint.name or ''}".strip()
+                    if target
+                    else "the recorded element",
+                    observed="a renamed element found by "
+                    + getattr(progress.resolved, "strategy", "a fallback rung"),
+                )
+            act = self._perform(step.id, action, step.risk)
             if act.ok:
                 break
-            retryable = step.risk != "irreversible" and not (
+            # At most once for anything irreversible or dialog-answering: a failed act may still
+            # have reached the server.
+            retryable = risk != "irreversible" and not (
                 isinstance(step, ClickStep) and step.dialog is not None
             )
             if not retryable or self._clock.now() - begin >= timeout_ms / 1000:
@@ -319,23 +357,39 @@ class ReplayEngine:
                     expected=step.description,
                     observed=act.message or "the surface refused the action",
                 )
+            self._log("act_retry", step_id=step.id, attempt=progress.attempts + 1)
             self._clock.sleep(POLL_MS)
         if not skip_wait:
             self._wait(step)
         if rerun:
             return
-        self._records.append(
-            StepRecord(
-                step_id=step.id,
-                action=step.action,
-                resolved_rung=resolved.rung_index if resolved else None,
-                resolved_strategy=resolved.strategy if resolved else None,
-                passed=True,
-                attempts=attempts,
-                duration_ms=max(0, int((self._clock.now() - begin) * 1000)),
-            )
-        )
+        self._records.append(self._step_record(progress, passed=True))
+        self._current = None
         self._capture(failed=False)
+
+    def _step_record(self, progress: _StepInProgress, *, passed: bool) -> StepRecord:
+        resolved = progress.resolved
+        return StepRecord(
+            step_id=progress.step.id,
+            action=progress.step.action,
+            resolved_rung=resolved.rung_index if resolved else None,
+            resolved_strategy=resolved.strategy if resolved else None,
+            passed=passed,
+            attempts=max(1, progress.attempts),
+            duration_ms=max(0, int((self._clock.now() - progress.started) * 1000)),
+        )
+
+    def _record_unfinished_step(self) -> None:
+        if self._current is not None:
+            self._records.append(self._step_record(self._current, passed=False))
+            self._current = None
+
+    def _effective_risk(self, step: Step, action: Action) -> RiskClass:
+        """The higher of the declared risk and the gate's, which can see page-dependent rules."""
+        try:
+            return max_risk(step.risk, self._gated.judge(action, declared_risk=step.risk).risk)
+        except SurfaceError:
+            return step.risk
 
     def _render(self, value: str) -> str:
         return render(
@@ -471,15 +525,6 @@ class ReplayEngine:
             identity_changed=found.identity_changed,
             matches=[{"strategy": a.strategy, "matches": a.matches} for a in found.attempts],
         )
-        if found.identity_changed and step.risk == "irreversible":
-            raise self._step_failure(
-                step,
-                "TARGET_CHANGED",
-                f"step {step.id} is irreversible and its target no longer looks like the "
-                "recorded element, so replay will not act on it",
-                expected=f"the recorded element {target.fingerprint.name or ''}".strip(),
-                observed=f"a renamed element found by {found.strategy}",
-            )
         return found
 
     def _note(self, step_id: str, target_ref: str, target: Target, found: Resolved) -> None:
@@ -614,15 +659,13 @@ class ReplayEngine:
     ) -> T:
         opened: dict[str, _OpenRecovery] = {}
         deadline = self._clock.now() + timeout_ms / 1000
-        retrying: _OpenRecovery | None = None
         try:
             while True:
                 self._raise_on_events(step)
-                skip = {retrying.detector.id} if retrying else set()
-                detector = self._matching(step, skip=skip)
+                windows = [s for s in opened.values() if s.window_ends is not None]
+                detector = self._matching(step, skip={s.detector.id for s in windows})
                 if detector is not None:
-                    retrying = self._handle(step, detector, opened) or retrying
-                    if retrying is None or retrying.detector is not detector:
+                    if self._handle(step, detector, opened) is None:
                         deadline = self._clock.now() + timeout_ms / 1000
                     continue
                 value = check()
@@ -630,10 +673,14 @@ class ReplayEngine:
                     self._close(step, opened, succeeded=True)
                     return value
                 now = self._clock.now()
-                if retrying is not None and retrying.window_ends is not None:
-                    if now >= retrying.window_ends:
-                        raise self._exhausted(step, retrying)
-                    pause = min(_poll_ms(retrying.outcome), retrying.window_ends - now)
+                live = [s for s in windows if s.window_ends is not None and now < s.window_ends]
+                if windows and not live:
+                    raise self._unverified(step, opened)
+                if live:
+                    pause = min(
+                        min(_poll_s(s.outcome) for s in live),
+                        min(s.window_ends or now for s in live) - now,
+                    )
                 elif now >= deadline:
                     fired = (
                         self._matching(step, timed_out=frozenset({checkpoint}), timeouts=True)
@@ -641,9 +688,11 @@ class ReplayEngine:
                         else None
                     )
                     if fired is None:
+                        if opened:
+                            raise self._unverified(step, opened)
                         raise on_timeout()
-                    retrying = self._handle(step, fired, opened) or retrying
-                    deadline = self._clock.now() + timeout_ms / 1000
+                    if self._handle(step, fired, opened) is None:
+                        deadline = self._clock.now() + timeout_ms / 1000
                     continue
                 else:
                     pause = min(POLL_MS / 1000, deadline - now)
@@ -714,7 +763,8 @@ class ReplayEngine:
     def _handle(
         self, step: Step, detector: OutcomeDetector, opened: dict[str, _OpenRecovery]
     ) -> _OpenRecovery | None:
-        """Act on a matched detector. Returns the recovery when it opened a wait_retry window."""
+        """Act on a matched detector. Returns the recovery when it opened a wait_retry window,
+        None when it acted (click or run_steps) and the interrupted wait should restart."""
         outcome = detector.outcome
         if isinstance(outcome, BusinessOutcome):
             message = self._message(outcome.message_from) or detector.description
@@ -741,37 +791,33 @@ class ReplayEngine:
             raise self._escalate(stop, "HARD_FAILURE_ESCALATE") if outcome.escalate else stop
         assert isinstance(outcome, Recoverable)
         recovery = outcome.recovery
+        key = (step.id, detector.id)
+        used = self._attempts.get(key, 0)
         state = opened.setdefault(
             detector.id, _OpenRecovery(detector, outcome, started=self._clock.now())
         )
-        if isinstance(recovery, WaitRetryRecovery):
-            if state.window_ends is not None:
-                raise self._exhausted(step, state)
-            state.attempts = 1
-            state.window_ends = self._clock.now() + recovery.max_total_ms / 1000
-            self._log(
-                "recovery_started",
-                step_id=step.id,
-                detector=detector.id,
-                kind=recovery.kind,
-                max_total_ms=recovery.max_total_ms,
-            )
-            return state
-        if state.attempts >= recovery.max_attempts:
+        # One wait_retry budget per step; clicks and re-runs up to max_attempts per step.
+        limit = 1 if isinstance(recovery, WaitRetryRecovery) else recovery.max_attempts
+        if used >= limit:
+            state.attempts = max(state.attempts, used)
             raise self._exhausted(step, state)
+        self._attempts[key] = used + 1
         state.attempts += 1
         self._log(
             "recovery_started",
             step_id=step.id,
             detector=detector.id,
             kind=recovery.kind,
-            attempt=state.attempts,
-            max_attempts=recovery.max_attempts,
+            attempt=used + 1,
+            limit=limit,
         )
+        if isinstance(recovery, WaitRetryRecovery):
+            state.window_ends = self._clock.now() + recovery.max_total_ms / 1000
+            return state
         if isinstance(recovery, ClickRecovery):
             self._recovery_click(step, detector, recovery)
         else:
-            self._recovery_steps(recovery)
+            self._recovery_steps(step, state, recovery)
         # Let the app answer the recovery before the wait looks again, so a sign-in that is still
         # redirecting is not read as the session expiring a second time.
         self._surface.settle(RECOVERY_SETTLE_MS, step.wait_for.timeout_ms)
@@ -788,16 +834,35 @@ class ReplayEngine:
             self._log("recovery_target_missing", step_id=step.id, detector=detector.id)
             return
         self._note(step.id, f"recovery:{detector.id}", recovery.target, found)
-        self._perform(step.id, Click(found.element), "safe")
+        result = self._perform(step.id, Click(found.element), "safe")
+        if not result.ok:
+            self._log("recovery_click_failed", step_id=step.id, message=result.message)
 
-    def _recovery_steps(self, recovery: RunStepsRecovery) -> None:
+    def _recovery_steps(self, step: Step, state: _OpenRecovery, recovery: RunStepsRecovery) -> None:
         """Re-run each step through the gate and its own wait, except the last, whose wait is the
-        interrupted one restarting: the app decides where a re-run lands."""
+        interrupted one restarting: the app decides where a re-run lands. A re-run step that
+        cannot be done means the recovery failed, so the recovering detector's code is reported."""
         last = recovery.step_ids[-1]
         for step_id in recovery.step_ids:
-            self._run_step(self._steps_by_id[step_id], skip_wait=step_id == last)
+            try:
+                self._run_step(self._steps_by_id[step_id], skip_wait=step_id == last)
+            except RunStopped as nested:
+                if nested.status != "hard_failure" or nested.code not in _RECOVERY_STEP_FAILURES:
+                    raise
+                raise self._exhausted(
+                    step, state, detail=f"Re-running {step_id} failed: {nested.message}"
+                ) from nested
 
-    def _exhausted(self, step: Step, state: _OpenRecovery) -> RunStopped:
+    def _unverified(self, step: Step, opened: dict[str, _OpenRecovery]) -> RunStopped:
+        """The wait ended without verifying after recoveries: the first recovery that acted (a
+        click or a re-run) owns the failure, else the last wait_retry window to close."""
+        acted = [s for s in opened.values() if s.window_ends is None]
+        if acted:
+            return self._exhausted(step, acted[0])
+        windows = [s for s in opened.values() if s.window_ends is not None]
+        return self._exhausted(step, max(windows, key=lambda s: s.window_ends or 0.0))
+
+    def _exhausted(self, step: Step, state: _OpenRecovery, detail: str = "") -> RunStopped:
         outcome = state.outcome
         self._log(
             "recovery_exhausted",
@@ -808,8 +873,9 @@ class ReplayEngine:
         )
         stop = RunStopped(
             outcome.code,
-            f"{state.detector.description} The {outcome.recovery.kind} recovery ran out after "
-            f"{state.attempts} attempt(s).",
+            f"{state.detector.description} The {outcome.recovery.kind} recovery did not bring the "
+            f"flow back after {max(1, state.attempts)} attempt(s)."
+            + (f" {detail}" if detail else ""),
             expected=self._expected_of(step),
             observed=self._observed_of(step),
         )
@@ -853,18 +919,30 @@ class ReplayEngine:
     def _finish(self) -> dict[str, OutputValue]:
         last = self._steps_by_id[self._success_step]
         checkpoint_id = self._cap.success.checkpoint
-        timeout_ms = last.wait_for.timeout_ms
         self._shows_sensitive = self._shows_sensitive or self._sensitive_outputs
-        self._wait_checkpoint(last, checkpoint_id, timeout_ms)
+        self._wait_checkpoint(last, checkpoint_id, last.wait_for.timeout_ms)
         self._log("success_verified", checkpoint=checkpoint_id)
         outputs: dict[str, OutputValue] = {}
         for spec in self._cap.outputs:
+            before = len(self._recoveries)
             try:
                 outputs[spec.name] = self._extract(last, spec)
-            except RunStopped:
-                if spec.name in self._cap.success.requires_outputs:
+            except RunStopped as stop:
+                failed_recovery = any(
+                    isinstance(r, AutomaticRecovery) and not r.succeeded
+                    for r in self._recoveries[before:]
+                )
+                optional_miss = (
+                    spec.name not in self._cap.success.requires_outputs
+                    and stop.status == "hard_failure"
+                    and stop.code == "OUTPUT_EXTRACTION_FAILED"
+                    and not failed_recovery
+                )
+                if not optional_miss:
                     raise
-                self._log("output_skipped", output=spec.name)
+                self._log("output_skipped", output=spec.name, reason=stop.code)
+        # Anything the page did while outputs were read still counts, e.g. a refused navigation.
+        self._raise_on_events(last)
         return outputs
 
     def _extract(self, step: Step, spec: OutputSpec) -> OutputValue:
@@ -905,8 +983,15 @@ class ReplayEngine:
         self._evidence.event("replay", event, **fields)
 
     def _capture(self, *, failed: bool) -> None:
-        """Screenshot per step, plus the accessibility snapshot on failure. Never fails the run."""
+        """Screenshot per step, plus the accessibility snapshot on failure. Never fails the run.
+
+        A failure keeps the step's own screenshot and adds step_NN_failure.png beside it. From
+        the success step on, a screen may show a sensitive output the run has not read, so its
+        files are flagged and dollar amounts in the snapshot are masked.
+        """
         name = f"step_{self._index:02d}.png"
+        if failed and (self._evidence.dir / name).exists():
+            name = f"step_{self._index:02d}_failure.png"
         try:
             snapshot = self._surface.snapshot()
             png = self._surface.screenshot()
@@ -917,7 +1002,9 @@ class ReplayEngine:
         if self._shows_sensitive:
             self._evidence.flag_sensitive(name)
         if failed:
-            a11y = self._evidence.snapshot(f"a11y_{self._index:02d}.json", snapshot)
+            a11y = self._evidence.snapshot(
+                f"a11y_{self._index:02d}.json", snapshot, mask_amounts=self._shows_sensitive
+            )
             if self._shows_sensitive:
                 self._evidence.flag_sensitive(a11y)
 
@@ -949,7 +1036,7 @@ class ReplayEngine:
         return self._where([])
 
 
-def _poll_ms(outcome: Recoverable) -> float:
+def _poll_s(outcome: Recoverable) -> float:
     recovery = outcome.recovery
     return (recovery.poll_ms if isinstance(recovery, WaitRetryRecovery) else POLL_MS) / 1000
 

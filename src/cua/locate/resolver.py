@@ -1,7 +1,6 @@
 """Resolver: walk a target's ladder on the live surface and return exactly one element or a reason.
 
-One pass, no guessing: a rung wins only with exactly one match of the recorded kind. Retrying over
-time belongs to the replay engine.
+One pass, no guessing: a rung wins only with exactly one match of the recorded kind.
 """
 
 from __future__ import annotations

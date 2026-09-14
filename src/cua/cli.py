@@ -281,7 +281,9 @@ def replay(
                     else "success",
                 )
                 typer.echo(json.dumps({**stability_summary(report), "report": str(path)}, indent=2))
-                code = 0 if report.passes == repeat else 2
+                code = (
+                    0 if report.passes == repeat and report.determinism != "nondeterministic" else 2
+                )
         finally:
             chromium.close()
     raise typer.Exit(code=code)

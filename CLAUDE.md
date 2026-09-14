@@ -322,7 +322,42 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - `cua mock inject|clear|reset` drive the control API so evidence runs are reproducible commands.
   Replay itself never touches `/__control`; the policy denies it.
 - `cua replay --repeat N` writes `stability_<ts>/` with each run and `stability.json` (passes, rung
-  distribution, duration spread, determinism, HMAC output digests under an in-memory key).
+  distribution, duration spread, determinism, HMAC output digests under an in-memory key). It
+  exits 0 only when every run passed and the runs are not nondeterministic.
+
+### Fixed after the phase 4 review (3 blocking, 6 high, 7 medium, lows and nits)
+
+- Session cookies survived the trace scrub in Playwright's log records (`set-cookie: ...` text).
+  The scrubber now blanks header values in every shape (header objects, cookie arrays, header
+  text in log messages), learns the cookie values it saw plus the live jar from
+  `Surface.session_tokens()`, and replaces those values in every member and encoding. The browser
+  tests scan every trace member for any surviving cookie value.
+- Optional outputs swallowed any stop, including policy blocks and escalations, and could crash
+  the result validator. Only an `OUTPUT_EXTRACTION_FAILED` with no failed recovery is skipped now,
+  and surface events are drained once more after the last output is read.
+- A failed act was retried by declared risk; a step declared safe that the gate rates irreversible
+  could submit twice. Retry and `TARGET_CHANGED` use the higher of declared and gate risk
+  (`GatedSurface.judge` answers without acting), and policy fit refuses a step whose declared risk
+  is below what the gate computes from the artifact alone.
+- A click or run_steps recovery whose restarted wait never verifies now owns the failure and its
+  code (SESSION_EXPIRED, not CHECKPOINT_TIMEOUT or SLOW_LOAD); a re-run step that cannot resolve,
+  act, or settle is reported as that recovery failing. Attempts count per step and detector across
+  every wait of the step. Several wait_retry windows can be open at once, each trigger set aside.
+- Escalation handlers return the stop: `no_operator` gives a hard failure, and an operator channel
+  returns `escalated` with its `intervention_path` (exit 3, tested with a stub). Resume after a
+  hand-back is phase 5: it turns the engine's stop into a loop in one place.
+- Evidence: failure snapshots mask dollar amounts from the success step on; a failure keeps the
+  step screenshot and adds `step_NN_failure.png`; the unfinished step gets a `passed=false` record;
+  a trace that cannot be scrubbed is dropped and the result stands; a crash still writes
+  `result.json` with status `crashed`.
+- Pre-run: `CAPABILITY_DEPRECATED` is its own code; a secret shorter than four characters and an
+  optional input the flow uses are refusals, not crashes; undeclared input values are masked.
+- Redactor: dollar amounts are masked at any length, number tokens never match inside a longer
+  number (4.0.00), short credentials carry base64 forms, identities carry JSON-escaped forms.
+- Left as documented limits: pre-run refusals have no screenshot, snapshot, or trace (no browser
+  opened, by design); `--repeat` from the CLI records no harness conditions, so a self-clearing
+  injection reads as nondeterministic there; the 3 s profile wait held under CPU load in the
+  review but is not proven on a slower CI machine.
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 

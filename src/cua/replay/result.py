@@ -65,7 +65,8 @@ class AutomaticRecovery(ResultModel):
     recovery_kind: Literal["click", "wait_retry", "run_steps"] = Field(description="What was done.")
     attempts: int = Field(ge=1, description="Attempts used.")
     succeeded: bool = Field(
-        description="Whether the interrupted wait verified afterwards. False means exhausted."
+        description="Whether the interrupted wait verified afterwards. False means it did not: "
+        "attempts ran out, or another outcome ended the run first."
     )
     duration_ms: int = Field(ge=0, description="Time spent recovering.")
 

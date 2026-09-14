@@ -66,23 +66,17 @@ class GatedSurface:
             return f"requires confirmation ({decision.handling}): {decision.reason}"
         return None
 
-    def perform(
-        self, action: Action, *, declared_risk: RiskClass = "safe", confirmed: bool = False
-    ) -> ActResult:
-        """Judge, then act. last_decision is the gate's answer, or None if it never judged."""
-        self.last_decision = None
+    def _proposal(self, action: Action, declared_risk: RiskClass) -> ProposedAction:
+        """What the gate judges for an action. Raises SurfaceError when the target is gone."""
         element = getattr(action, "element", None)
         target_text = None
-        try:
-            if element is not None:
-                facts = self._backend.describe(element)
-                target_text = facts.name or facts.own_text or None
-                frame_url = self._surface.frame_url(element.frame_path)
-            else:
-                frame_url = self._surface.frame_url(()) or "about:blank"
-        except SurfaceError as exc:
-            return ActResult(ok=False, action=action.kind, code="ACTION_FAILED", message=str(exc))
-        proposed = ProposedAction(
+        if element is not None:
+            facts = self._backend.describe(element)
+            target_text = facts.name or facts.own_text or None
+            frame_url = self._surface.frame_url(element.frame_path)
+        else:
+            frame_url = self._surface.frame_url(()) or "about:blank"
+        return ProposedAction(
             phase="action",
             action=action.kind,
             frame_url=frame_url,
@@ -91,6 +85,22 @@ class GatedSurface:
             key=action.key if isinstance(action, PressKey) else None,
             declared_risk=declared_risk,
         )
+
+    def judge(self, action: Action, *, declared_risk: RiskClass = "safe") -> PolicyDecision:
+        """The gate's answer for an action, without acting. Replay reads its risk to decide
+        whether a failed act may be retried. Raises SurfaceError when the target is gone."""
+        return self._gate.check(self._proposal(action, declared_risk))
+
+    def perform(
+        self, action: Action, *, declared_risk: RiskClass = "safe", confirmed: bool = False
+    ) -> ActResult:
+        """Judge, then act. last_decision is the gate's answer, or None if it never judged."""
+        self.last_decision = None
+        try:
+            proposed = self._proposal(action, declared_risk)
+        except SurfaceError as exc:
+            return ActResult(ok=False, action=action.kind, code="ACTION_FAILED", message=str(exc))
+        target_text = proposed.target_text
         decision = self._gate.check(proposed)
         self.last_decision = decision
         self._confirmed_now = confirmed

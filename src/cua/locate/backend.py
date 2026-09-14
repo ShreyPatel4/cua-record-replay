@@ -1,7 +1,6 @@
 """Locator backend contract: the per-surface primitives the recorder and resolver are built on.
 
-A surface answers "which elements match this rung" and "what is this element"; the ladder logic
-above it (ordering, the one-match rule, drift, weak targets) is shared by every surface.
+A surface matches rungs and describes elements; the ladder logic above it is shared by all.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """Recorder: turn one live element into a verified locator ladder, ranked and explained.
 
-Every candidate rung is resolved against the page before it is kept, so a ladder never ships a rung
-that already fails. Nothing here knows which surface is underneath.
+Every rung is resolved on the page before it is kept, so a ladder never ships a failing rung.
 """
 
 from __future__ import annotations

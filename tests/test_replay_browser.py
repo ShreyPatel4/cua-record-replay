@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import zipfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from playwright.sync_api import Browser
@@ -52,6 +54,17 @@ SIGN_OUT_STEP = {
     "risk": "safe",
     "wait_for": {"kind": "settle", "quiet_ms": 300, "timeout_ms": 5000},
 }
+
+
+class CookieKeepingSurface(PlaywrightSurface):
+    """Remembers the session cookies each run ends with, so leak scans can look for them."""
+
+    seen: ClassVar[set[str]] = set()
+
+    def close(self) -> None:
+        with suppress(Exception):
+            CookieKeepingSurface.seen.update(self.session_tokens())
+        super().close()
 
 
 @dataclass
@@ -104,7 +117,7 @@ def replayer(
             "CORELEDGER_OPERATOR_PASSWORD": mock_settings.operator_password,
         },
         evidence_root=tmp_path / "evidence",
-        open_surface=lambda: PlaywrightSurface.launch(browser, control=lambda: None),
+        open_surface=lambda: CookieKeepingSurface.launch(browser, control=lambda: None),
     )
 
 
@@ -118,8 +131,25 @@ def _manifest(result: ReplayResult) -> dict[str, bool]:
 
 
 def _assert_no_secrets(result: ReplayResult, settings: MockSettings) -> None:
+    """Credentials, the operator id, and session cookies, in every file and every trace member.
+
+    Cookies deleted mid-run are not in the jar at the end, so trace text is also checked for any
+    cookie header or CLSESSID pair whose value survived."""
     secrets = {"password": settings.operator_password, "operator": settings.operator_user}
+    secrets |= {f"cookie{i}": v for i, v in enumerate(sorted(CookieKeepingSurface.seen))}
     assert not find_leaks(_files(result), secrets)
+    trace = Path(result.evidence_dir) / "trace.zip"
+    if trace.exists():
+        with zipfile.ZipFile(trace) as archive:
+            for name in archive.namelist():
+                data = archive.read(name)
+                assert not re.search(rb"CLSESSID=(?!\[REDACTED\])", data), name
+                assert not re.search(rb"(?i)\bcookie[ \t]*+:[ \t]*+(?!\[REDACTED\])", data), name
+
+
+def _events(result: ReplayResult) -> list[dict[str, Any]]:
+    lines = (Path(result.evidence_dir) / "run.jsonl").read_text().splitlines()
+    return [json.loads(line) for line in lines]
 
 
 def _only(result: ReplayResult) -> AutomaticRecovery:
@@ -355,7 +385,13 @@ def test_a_policy_block_during_replay_is_a_hard_failure_never_a_skip(
     result = replayer.run("10007", replayer.tweak(sign_out_after_sign_in))
     assert (result.status, result.outcome_code) == ("hard_failure", "POLICY_BLOCKED")
     assert result.step_reached == "s041"
-    assert [s.step_id for s in result.steps] == ["s01", "s02", "s03", "s04"]
+    assert [(s.step_id, s.passed) for s in result.steps] == [
+        ("s01", True),
+        ("s02", True),
+        ("s03", True),
+        ("s04", True),
+        ("s041", False),
+    ]
 
 
 def _irreversible_search(policy_ref: str) -> Callable[[dict[str, Any]], None]:
@@ -373,6 +409,9 @@ def test_an_irreversible_step_under_escalate_handling_never_acts(replayer: Repla
     assert result.message
     assert "IRREVERSIBLE_NEEDS_HUMAN" in result.message
     assert result.step_reached == "s06"
+    s06_acts = [e for e in _events(result) if e["event"] == "act" and e["step_id"] == "s06"]
+    assert [(e["ok"], e["code"]) for e in s06_acts] == [(False, "CONFIRMATION_REQUIRED")]
+    assert not any(e["event"] == "wait_passed" and e["step_id"] == "s06" for e in _events(result))
 
 
 def test_confirm_handling_needs_the_flag_and_then_proceeds(replayer: Replayer) -> None:
@@ -433,3 +472,29 @@ def test_the_cli_exits_zero_for_not_found_and_two_for_a_hard_failure(
     )
     code, body = cli("10013")
     assert (code, body["status"], body["outcome_code"]) == (2, "hard_failure", "PERMISSION_DENIED")
+
+
+def test_an_output_that_does_not_parse_fails_without_leaking_the_balance(
+    replayer: Replayer, mock_settings: MockSettings
+) -> None:
+    def read_the_name_cell(data: dict[str, Any]) -> None:
+        data["outputs"][0]["extract"]["target"]["ladder"] = [
+            {
+                "strategy": "anchor_relative",
+                "anchor_text": "Name",
+                "direction": "right",
+                "same_row": True,
+                "target_kind": "text",
+                "nth": 1,
+                "confidence": 0.8,
+            }
+        ]
+
+    result = replayer.run("10007", replayer.tweak(read_the_name_cell))
+    assert (result.status, result.outcome_code) == ("hard_failure", "OUTPUT_EXTRACTION_FAILED")
+    snapshot = (Path(result.evidence_dir) / "a11y_06.json").read_text()
+    assert "4,210.55" not in snapshot, "amounts are masked once a sensitive output may be on screen"
+    assert "4210.55" not in snapshot
+    assert _manifest(result)["a11y_06.json"] is True
+    assert {"step_06.png", "step_06_failure.png", "trace.zip"} <= {p.name for p in _files(result)}
+    _assert_no_secrets(result, mock_settings)

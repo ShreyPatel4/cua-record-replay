@@ -1,7 +1,6 @@
 """Accessibility snapshot parsing: Playwright's ai-mode aria text into frame-aware, boxed nodes.
 
-Boxes inside a frame are frame-relative in that text; parsing adds each frame's content offset so
-every box is page-absolute. Input values are dropped here, before any node exists.
+Boxes become page-absolute by adding frame offsets, and input values are dropped before any node.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """GatedSurface in Chromium: the gate judges actions, every request they cause, and dialogs.
 
-Also the control lock: automation neither acts nor reads while a human holds the session, and the
-human's own dialogs and navigation are left alone.
+Also the control lock: automation stays out while a human holds the session, and so does the gate.
 """
 
 from __future__ import annotations

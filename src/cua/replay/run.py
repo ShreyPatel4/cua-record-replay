@@ -9,6 +9,7 @@ import json
 import os
 import secrets as token
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,10 +25,11 @@ from cua.policy.enforce import GatedSurface
 from cua.policy.fit import capability_policy_errors
 from cua.policy.gate import PolicyGate
 from cua.policy.models import Policy, PolicyError, load_policy
-from cua.policy.redact import Redactor
+from cua.policy.redact import MIN_SECRET_LEN, Redactor
 from cua.replay.conditions import ConditionSurface
-from cua.replay.engine import Clock, ReplayEngine
+from cua.replay.engine import Clock, Escalation, ReplayEngine, no_operator
 from cua.replay.result import IterationSummary, ReplayResult, StabilityReport, outputs_digest
+from cua.vocab import template_refs
 
 EXTRA_SECRET_ENV = ("ANTHROPIC_API_KEY",)
 TRACE_FILE = "trace.zip"
@@ -54,7 +56,7 @@ class ReplayRequest:
 
 
 def new_run_id(prefix: str, now: datetime) -> str:
-    return f"{prefix}_{now:%Y%m%dT%H%M%SZ}_{token.token_hex(2)}"
+    return f"{prefix}_{now:%Y%m%dT%H%M%SZ}_{token.token_hex(3)}"
 
 
 class _Refused(Exception):
@@ -66,12 +68,21 @@ class _Refused(Exception):
 def _redactor(
     capability: Capability, request: ReplayRequest, environ: Mapping[str, str]
 ) -> Redactor:
-    present = [s for s in capability.secrets if environ.get(s.env_var)]
-    return Redactor(
-        [environ[s.env_var] for s in present if s.kind == "credential"]
-        + [environ[k] for k in request.extra_env_secrets if environ.get(k)],
-        identities=[environ[s.env_var] for s in present if s.kind == "identity"],
-    )
+    """Every secret value long enough to redact. Shorter declared secrets are refused later."""
+
+    def usable(env_var: str) -> bool:
+        return len(environ.get(env_var, "")) >= MIN_SECRET_LEN
+
+    credentials = [
+        environ[s.env_var]
+        for s in capability.secrets
+        if s.kind == "credential" and usable(s.env_var)
+    ]
+    identities = [
+        environ[s.env_var] for s in capability.secrets if s.kind == "identity" and usable(s.env_var)
+    ]
+    extras = [environ[k] for k in request.extra_env_secrets if usable(k)]
+    return Redactor(credentials + extras, identities=identities)
 
 
 def _load_policy(request: ReplayRequest) -> tuple[Policy | None, str]:
@@ -84,7 +95,7 @@ def _load_policy(request: ReplayRequest) -> tuple[Policy | None, str]:
 def _preflight(
     request: ReplayRequest, policy: Policy | None, policy_problem: str, environ: Mapping[str, str]
 ) -> tuple[Capability, Policy, dict[str, TypedInput], dict[str, str]]:
-    """The five pre-run refusals, in the order a caller can fix them. Raises _Refused."""
+    """The pre-run refusals, in the order a caller can fix them. Raises _Refused."""
     base = request.capability
     meta = base.capability
     try:
@@ -96,14 +107,20 @@ def _preflight(
             f"a tenant this capability knows: {sorted(base.tenant_overrides) or 'none'}",
             f"tenant {request.tenant!r}",
         ) from exc
-    if meta.status != "approved" and not (meta.status == "draft" and request.allow_draft):
-        hint = " Approve it, or pass --allow-draft." if meta.status == "draft" else ""
+    if meta.status == "deprecated":
+        raise _Refused(
+            "CAPABILITY_DEPRECATED",
+            f"{meta.id}@{meta.version} is deprecated; replay a current version",
+            "status approved",
+            "status deprecated",
+        )
+    if meta.status == "draft" and not request.allow_draft:
         raise _Refused(
             "DRAFT_NOT_APPROVED",
-            f"{meta.id}@{meta.version} is {meta.status}; unattended replay needs an approved "
-            f"capability.{hint}",
+            f"{meta.id}@{meta.version} is a draft; unattended replay needs an approved "
+            "capability. Approve it, or pass --allow-draft.",
             "status approved",
-            f"status {meta.status}",
+            "status draft",
         )
     if policy is None:
         raise _Refused(
@@ -117,29 +134,42 @@ def _preflight(
         raise _Refused(
             "POLICY_MISMATCH",
             "the capability does not fit its policy: " + "; ".join(misfits),
-            f"every entry URL, navigation, and action inside {policy.id}",
+            f"every entry URL, navigation, action, and declared risk inside {policy.id}",
             "; ".join(misfits),
         )
+    expected_inputs = "inputs: " + ", ".join(
+        f"{p.name} ({p.type}{', required' if p.required else ''})" for p in capability.inputs
+    )
     try:
         typed = coerce_inputs(capability, request.inputs)
     except InputError as exc:
         raise _Refused(
-            "INPUT_INVALID",
-            "; ".join(exc.problems),
-            "inputs: "
-            + ", ".join(
-                f"{p.name} ({p.type}{', required' if p.required else ''})"
-                for p in capability.inputs
-            ),
-            "; ".join(exc.problems),
+            "INPUT_INVALID", "; ".join(exc.problems), expected_inputs, "; ".join(exc.problems)
         ) from exc
+    flow = json.dumps(capability.model_dump(mode="json", exclude={"inputs", "outputs"}))
+    unset = sorted({n for scope, n in template_refs(flow) if scope == "inputs"} - set(typed))
+    if unset:
+        problem = f"optional inputs {unset} are used by the flow, so supply them"
+        raise _Refused("INPUT_INVALID", problem, expected_inputs, problem)
     missing = [s.env_var for s in capability.secrets if not environ.get(s.env_var)]
-    if missing:
+    short = [
+        s.env_var
+        for s in capability.secrets
+        if 0 < len(environ.get(s.env_var, "")) < MIN_SECRET_LEN
+    ]
+    if missing or short:
+        parts = []
+        if missing:
+            parts.append(f"unset: {', '.join(missing)}")
+        if short:
+            parts.append(f"shorter than {MIN_SECRET_LEN} characters: {', '.join(short)}")
+        observed = "; ".join(parts)
         raise _Refused(
             "SECRET_MISSING",
-            f"set {', '.join(missing)} in the environment; replay reads secrets only from there",
+            "secrets come only from the environment, and each must be at least "
+            f"{MIN_SECRET_LEN} characters so it can be redacted ({observed})",
             "every secret the capability declares",
-            f"unset: {', '.join(missing)}",
+            observed,
         )
     values = {s.name: environ[s.env_var] for s in capability.secrets}
     return capability, policy, typed, values
@@ -152,8 +182,9 @@ def run_replay(
     open_surface: SurfaceFactory,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     clock: Callable[[ReplaySurface], Clock] | None = None,
+    escalation: Escalation = no_operator,
 ) -> ReplayResult:
-    """One replay. Pre-run refusals and engine results alike leave result.json and a manifest."""
+    """One replay. Refusals, results, and crashes alike leave result.json and a manifest."""
     base = request.capability
     started = now()
     run_id = new_run_id("replay", started)
@@ -165,7 +196,9 @@ def run_replay(
         redactor,
         sensitive_pages=policy.sensitive_pages if policy else (),
     )
-    masked = redactor.params(dict(request.inputs), [p.name for p in base.inputs if p.sensitive])
+    declared = {p.name: p for p in base.inputs}
+    hidden = [k for k in request.inputs if k not in declared or declared[k].sensitive]
+    masked = redactor.params(dict(request.inputs), hidden)
     try:
         capability, policy, typed, secret_values = _preflight(
             request, policy, policy_problem, environ
@@ -195,7 +228,7 @@ def run_replay(
             surface, surface, PolicyGate(policy), confirm_irreversible=request.confirm_irreversible
         )
         surface.start_trace()
-        engine = ReplayEngine(
+        result = ReplayEngine(
             capability,
             surface,
             gated,
@@ -208,15 +241,14 @@ def run_replay(
             started_at=started,
             tenant=request.tenant,
             clock=clock(surface) if clock else None,
-        )
-        result = engine.run()
+            escalation=escalation,
+        ).run()
         _keep_or_discard_trace(surface, result, redactor, evidence)
     except BaseException as exc:
-        evidence.event("replay", "run_crashed", error=type(exc).__name__, message=str(exc))
-        evidence.finish()
+        _record_crash(evidence, redactor, exc)
         raise
     finally:
-        surface.stop_trace(None)
+        _quietly(lambda: surface.stop_trace(None))
         surface.close()
     problems = result.contract_problems(capability)
     if problems:
@@ -224,20 +256,47 @@ def run_replay(
     return _conclude(result, capability, evidence)
 
 
+def _quietly(action: Callable[[], object]) -> None:
+    """Cleanup that must never mask the run's own outcome."""
+    with suppress(Exception):
+        action()
+
+
 def _keep_or_discard_trace(
     surface: ReplaySurface, result: ReplayResult, redactor: Redactor, evidence: EvidenceWriter
 ) -> None:
     """Failures keep a trace, scrubbed of secrets and cookies before it reaches evidence. The raw
-    archive lives only in a temporary directory, so a crash cannot leave it behind."""
+    archive lives only in a temporary directory, and a trace that cannot be scrubbed is dropped
+    while the result still stands."""
     if result.status not in KEEP_TRACE_FOR:
         surface.stop_trace(None)
         return
+    try:
+        tokens = surface.session_tokens()
+    except Exception:
+        tokens = []
     with TemporaryDirectory(prefix="cua-trace-") as tmp:
         raw = Path(tmp) / TRACE_FILE
-        if surface.stop_trace(raw):
-            scrub_trace(raw, evidence.dir / TRACE_FILE, redactor)
-            evidence.flag_sensitive(TRACE_FILE)
-            evidence.event("replay", "trace_saved", path=TRACE_FILE)
+        try:
+            if not surface.stop_trace(raw):
+                return
+            scrub_trace(raw, evidence.dir / TRACE_FILE, redactor, tokens)
+        except Exception as exc:
+            (evidence.dir / TRACE_FILE).unlink(missing_ok=True)
+            evidence.event("replay", "trace_dropped", error=type(exc).__name__)
+            return
+    evidence.flag_sensitive(TRACE_FILE)
+    evidence.event("replay", "trace_saved", path=TRACE_FILE)
+
+
+def _record_crash(evidence: EvidenceWriter, redactor: Redactor, exc: BaseException) -> None:
+    """A crash is not a ReplayResult, but it still leaves a result.json that says what happened."""
+    message = redactor.text(f"{type(exc).__name__}: {exc}")
+    evidence.event("replay", "run_crashed", error=type(exc).__name__, message=message)
+    evidence.write_json(
+        "result.json", {"status": "crashed", "run_id": evidence.run_id, "message": message}
+    )
+    evidence.finish()
 
 
 def _conclude(

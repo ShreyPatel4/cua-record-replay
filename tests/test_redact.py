@@ -132,3 +132,34 @@ def test_a_sensitive_amount_hides_its_bare_number_forms_as_whole_tokens() -> Non
     assert redactor.text("saw $4,210.55, 4,210.55 and 4210.55 but not 14210.55") == (
         "saw [REDACTED], [REDACTED] and [REDACTED] but not 14210.55"
     )
+
+
+def test_short_dollar_balances_are_masked_and_number_parts_are_left_alone() -> None:
+    from cua.policy.redact import Redactor
+
+    redactor = Redactor()
+    redactor.add_value("$5")
+    redactor.add_value("$0.00")
+    assert redactor.text("paid $5 of $50; build 4.0.00; fee 0.00") == (
+        "paid [REDACTED] of $50; build 4.0.00; fee [REDACTED]"
+    )
+
+
+def test_a_short_credential_is_scrubbed_from_base64_bodies() -> None:
+    import base64
+
+    from cua.policy.redact import REDACTED, Redactor
+
+    redactor = Redactor(["4821"])
+    for prefix in (b"", b"a", b"ab", b"pin="):
+        body = base64.b64encode(prefix + b"4821&next=")
+        assert REDACTED.encode() in redactor.scrub_bytes(body), prefix
+
+
+def test_a_json_escaped_identity_is_masked() -> None:
+    import json
+
+    from cua.policy.redact import REDACTED, Redactor
+
+    redactor = Redactor(identities=['tel"ler-1'])
+    assert REDACTED in redactor.text(json.dumps({"user": 'tel"ler-1'}))
