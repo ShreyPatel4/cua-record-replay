@@ -6,8 +6,8 @@
     "status": "draft",
     "name": "Read member savings balance",
     "description": "Log in, look up member <member_number> and read their current savings balance.",
-    "created_at": "2026-09-14T05:18:27Z",
-    "created_from_run_id": "disc_20260914T051827Z_51db",
+    "created_at": "2026-09-14T05:57:30Z",
+    "created_from_run_id": "disc_20260914T055730Z_9596",
     "policy_ref": "coreledger-readonly"
   },
   "surface": {
@@ -75,7 +75,7 @@
             "role": "cell",
             "kind": "text"
           },
-          "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept anchor_relative, bbox. Weak target: no name, label, or stable text, so it relies on position."
+          "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Share Savings' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
         },
         "parse": "money_usd"
       },
@@ -144,7 +144,7 @@
           "input_type": "text",
           "kind": "input"
         },
-        "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept role_name, label_text, anchor_relative, bbox."
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
       },
       "value": "{{secrets.operator_id}}",
       "clear_first": true,
@@ -204,7 +204,7 @@
           "input_type": "password",
           "kind": "input"
         },
-        "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept role_name, label_text, anchor_relative, bbox."
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Password', the handle least tied to layout. label_text: reached through its visible label 'Password' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator ID', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
       },
       "value": "{{secrets.operator_password}}",
       "clear_first": true,
@@ -257,7 +257,7 @@
           "input_type": "submit",
           "kind": "clickable"
         },
-        "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept role_name, anchor_relative, bbox."
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it button 'Sign in', the handle least tied to layout. anchor_relative: the clickable below the fixed text 'Password', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
       },
       "risk": "safe",
       "wait_for": {
@@ -308,7 +308,7 @@
           "input_type": "text",
           "kind": "input"
         },
-        "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept label_text, anchor_relative, bbox."
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
       },
       "value": "{{inputs.member_number}}",
       "clear_first": true,
@@ -360,7 +360,7 @@
           "text": "Find",
           "kind": "clickable"
         },
-        "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept text_exact, anchor_relative, bbox."
+        "notes": "Every rung here resolved to exactly this element on the live page. text_exact: its own text 'Find' is interface wording, not data. anchor_relative: the clickable right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
       },
       "risk": "safe",
       "wait_for": {
@@ -430,7 +430,7 @@
                 "input_type": "text",
                 "kind": "input"
               },
-              "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept role_name, label_text, anchor_relative, bbox."
+              "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
             }
           }
         ]
@@ -487,7 +487,7 @@
                 "input_type": "text",
                 "kind": "input"
               },
-              "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept label_text, anchor_relative, bbox."
+              "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
             }
           }
         ]
@@ -543,7 +543,7 @@
                 "role": "cell",
                 "kind": "text"
               },
-              "notes": "Recorded from the live page: each rung resolved to exactly this element. Kept anchor_relative, bbox. Weak target: no name, label, or stable text, so it relies on position."
+              "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Share Savings' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
             }
           }
         ]
@@ -561,7 +561,7 @@
   "provenance": {
     "recorded_by": "discover",
     "model": "claude-sonnet-4-6",
-    "evidence_run": "evidence/disc_20260914T051827Z_51db",
+    "evidence_run": "evidence/disc_20260914T055730Z_9596",
     "review_notes": "Recorded by discovery on the happy path. Each checkpoint is the text that appeared after its step plus the element the next step acts on. Outcome detectors are empty on purpose: one successful run cannot observe a not-found result, an interstitial, a slow load, an expired session, or an app error, so a reviewer adds them, and tunes timeouts, before approval."
   }
 }

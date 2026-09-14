@@ -1,5 +1,5 @@
 {
-  "run_id": "disc_20260914T051827Z_51db",
+  "run_id": "disc_20260914T055730Z_9596",
   "goal": "Log in, look up member *0007 and read their current savings balance.",
   "entry_url": "http://127.0.0.1:5050/",
   "model": "claude-sonnet-4-6",
@@ -8,9 +8,9 @@
   "stop_reason": "done",
   "message": "saved draft coreledger.member.read_savings_balance@1.0.0; review it and add outcome detectors before approval",
   "turns": 7,
-  "duration_ms": 25812,
-  "input_tokens": 15982,
-  "output_tokens": 635,
+  "duration_ms": 26292,
+  "input_tokens": 15934,
+  "output_tokens": 617,
   "steps_recorded": 6,
   "outputs": [
     "savings_balance"
@@ -25,5 +25,5 @@
   ],
   "capability": "coreledger.member.read_savings_balance@1.0.0",
   "artifact_path": "artifacts/coreledger.member.read_savings_balance@1.0.0.capability.json",
-  "evidence_dir": "evidence/disc_20260914T051827Z_51db"
+  "evidence_dir": "evidence/disc_20260914T055730Z_9596"
 }

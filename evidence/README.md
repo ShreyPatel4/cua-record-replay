@@ -5,14 +5,16 @@ has a `manifest.json` listing its files with a sha256 and a `sensitive` flag.
 
 | run | demonstrates | command |
 |---|---|---|
-| `disc_20260914T051827Z_51db/` | The real discovery run (brief section 4: "the discovery run has to be real"). `claude-sonnet-4-6` drove the live CoreLedger mock from the goal to a recorded draft in 7 turns and 26 s: it signed in with credential templates it never saw the values of, looked up the member, declared the balance as an output, and called done on the cell that shows it. The recorder turned the run into `artifacts/coreledger.member.read_savings_balance@1.0.0.capability.json`, proposing `member_number` as an input, which was accepted with `--yes`. | `uv run cua discover --goal "Log in, look up member 10007 and read their current savings balance." --target http://127.0.0.1:5050/ --capability-id coreledger.member.read_savings_balance --name "Read member savings balance" --app-version 4.2.1 --evidence-root evidence --yes` |
+| `disc_20260914T055730Z_9596/` | The real discovery run (brief section 4: "the discovery run has to be real"). `claude-sonnet-4-6` drove the live CoreLedger mock from the goal to a recorded draft in 7 turns and 26 s: it signed in with credential templates it never saw the values of, looked up the member, declared the balance as an output, and called done on the cell that shows it. The recorder turned the run into `artifacts/coreledger.member.read_savings_balance@1.0.0.capability.json`, proposing `member_number` as an input, which was accepted with `--yes`. | `uv run cua discover --goal "Log in, look up member 10007 and read their current savings balance." --target http://127.0.0.1:5050/ --capability-id coreledger.member.read_savings_balance --name "Read member savings balance" --app-version 4.2.1 --evidence-root evidence --yes` |
 
 ## Reading a discovery run
 
 - `run.jsonl`: one JSON object per event. `model_turn` carries the model's one-sentence rationale,
   the tool it called, and its arguments; `tool_result` carries what the loop told the model, the
-  locator ladder recorded for the target, and whether the target is weak; `decision` is the policy
-  gate's answer for each action; `observation` names the screenshot and the frame URLs.
+  step id and rung when the action became a step, the locator ladder, and whether the target is
+  weak; `decision` is the policy gate's answer for each action; `observation` names the screenshot
+  and the frame URLs; `checkpoints_derived` lists each step's wait and `success_checkpoint` shows
+  that the derived success condition held on the final screen before the draft was saved.
 - `step_NN.png`: the screen the model saw at turn NN.
 - `artifact.capability.json`: a copy of the draft as saved to the catalog.
 - `result.json`: the discovery result (status, stop reason, turns, tokens, parameter decisions).
@@ -26,9 +28,11 @@ four digits, and a value declared as an output is masked from the moment it is d
 balance never appears in the log. Screenshots are not image-redacted. The manifest flags the ones
 taken on sign-in pages or after a sensitive output was declared; delete flagged files before
 sharing a run outside the team. Names are not detected: the synthetic member's name appears in the
-model's rationale. All data in the mock app is fake.
+model's done summary. All data in the mock app is fake.
 
-An earlier real run in the same session was deleted rather than committed. It exposed two defects:
-the rationale was empty because a forced tool choice suppresses the model's text, and the
-declared balance reached the log. Both are fixed and covered by tests, and the run above is the
-rerun.
+This is the fourth real run of this goal. The first was deleted before it was committed: its
+rationale was empty because a forced tool choice suppresses the model's text, and the declared
+balance reached the log. The second was committed, then replaced after the phase 3 review so the
+evidence matches the reviewed recorder (per-rung robustness notes, step ids and rungs in the log,
+amounts masked in the model's own words); git history keeps it. The third was discarded
+uncommitted to fix the wording of those notes ("below of").

@@ -71,8 +71,9 @@ def _reason(rung: Rung) -> str:
     if isinstance(rung, AnchorRelativeRung):
         row = " in the same row" if rung.same_row else ""
         slot = f", number {rung.nth} that way" if rung.nth > 1 else ""
+        where = {"right": "right of", "left": "left of", "below": "below", "above": "above"}
         return (
-            f"anchor_relative: the {rung.target_kind} {rung.direction} of the fixed text "
+            f"anchor_relative: the {rung.target_kind} {where[rung.direction]} the fixed text "
             f"'{rung.anchor_text}'{row}{slot}, which survives the element itself being renamed"
         )
     return "bbox: coordinates as a last resort, broken by any layout change"

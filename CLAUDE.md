@@ -285,7 +285,8 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   appears in the model's rationale.
 - The first real run was deleted (empty rationale, balance in the log). Both were fixed with tests
   and the run was redone. After the phase 3 review (1 blocking, 2 high, 8 lower findings, all
-  fixed) the run was redone once more so the committed evidence matches the recorder.
+  fixed) the run was redone as `evidence/disc_20260914T055730Z_9596/` so the committed evidence
+  matches the reviewed recorder.
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 

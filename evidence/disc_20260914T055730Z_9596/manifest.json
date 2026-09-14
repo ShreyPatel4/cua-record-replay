@@ -1,22 +1,22 @@
 {
-  "run_id": "disc_20260914T051827Z_51db",
+  "run_id": "disc_20260914T055730Z_9596",
   "files": [
     {
       "path": "artifact.capability.json",
-      "sha256": "7206b578501f0461175de8696d732228253ff0480e2c51e03e4b179d8204c052",
-      "bytes": 16415,
+      "sha256": "579514c8e2c6789d7f364654cc3f7817266836403550c6fbbfeff07ff124d591",
+      "bytes": 19046,
       "sensitive": false
     },
     {
       "path": "result.json",
-      "sha256": "93d29fc46be0502b1c0f5edf03c5d4bfb4a026be9d4383044b5bb9d7ebf47eb2",
+      "sha256": "6e0b9b1d8554204ecf80d47976cba0f9f66f17602b015828353037e71d217fdd",
       "bytes": 928,
       "sensitive": false
     },
     {
       "path": "run.jsonl",
-      "sha256": "50f98d39ad31344a06e88e49bf327ddd8ff5a1dcaf52042eef24e4f535933edd",
-      "bytes": 9598,
+      "sha256": "68162f208a8c8f2855dbd02b07dacfc2636ca25fcd1739599c48f71157390f0a",
+      "bytes": 10412,
       "sensitive": false
     },
     {
