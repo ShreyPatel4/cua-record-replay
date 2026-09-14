@@ -3,12 +3,14 @@
   "capability": {
     "id": "coreledger.member.read_savings_balance",
     "version": "1.1.0",
-    "status": "draft",
+    "status": "approved",
     "name": "Read member savings balance",
     "description": "Sign in to CoreLedger, look up a member by number, and return their current share savings balance.",
     "created_at": "2026-09-14T09:00:00Z",
     "created_from_run_id": "disc_20260914T055730Z_9596",
-    "policy_ref": "coreledger-readonly"
+    "policy_ref": "coreledger-readonly",
+    "approved_by": "Shrey Patel",
+    "approved_at": "2026-09-14T07:42:48Z"
   },
   "surface": {
     "kind": "web",
@@ -593,7 +595,7 @@
     },
     {
       "id": "od_app_error",
-      "description": "The server returned its 500 page. A human can often clear the cause and send the run on. Unscoped: any page, sign-in and re-run steps included, can return it.",
+      "description": "The server returned its 500 page. A human can often clear the cause and send the run on.",
       "when": {
         "kind": "any",
         "conditions": [
@@ -621,7 +623,7 @@
     },
     {
       "id": "od_access_denied",
-      "description": "The operator role is not allowed to open this record. Unscoped for the same reason: any page can refuse the operator's role.",
+      "description": "The operator role is not allowed to open this record.",
       "when": {
         "kind": "text_present",
         "text": "Access denied",
@@ -797,6 +799,6 @@
     "recorded_by": "discover",
     "model": "claude-sonnet-4-6",
     "evidence_run": "evidence/disc_20260914T055730Z_9596",
-    "review_notes": "Recorded by discovery on the happy path (1.0.0), then reviewed by hand. The review added the seven outcome detectors, ported from the signed-off example and renamed to this recording's input and checkpoints (member_number, cp_member_profile), and cut s06's wait from 10 s to 3 s so a slow profile trips checkpoint_timeout and od_slow_member_load's wait_retry instead of being absorbed by a long wait. Steps, targets, and checkpoints are the recording's own. Minor bump: new outcome codes and a flow change, no contract break."
+    "review_notes": "Recorded by discovery on the happy path (1.0.0), then reviewed by hand. The review added the seven outcome detectors, ported from the signed-off example and renamed to this recording's input and checkpoints (member_number, cp_member_profile), and cut s06's wait from 10 s to 3 s so a slow profile trips checkpoint_timeout and od_slow_member_load's wait_retry instead of being absorbed by a long wait. Steps, targets, and checkpoints are the recording's own. od_app_error and od_access_denied are unscoped on purpose: any page, sign-in and re-run steps included, can return a 500 or refuse the operator's role. Minor bump: new outcome codes and a flow change, no contract break."
   }
 }

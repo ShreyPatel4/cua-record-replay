@@ -1,0 +1,107 @@
+{
+  "capability": "coreledger.member.read_savings_balance@1.1.0",
+  "expected_status": "success",
+  "runs": 5,
+  "passes": 5,
+  "determinism": "deterministic",
+  "rung_distribution": {
+    "s02": {
+      "role_name": 5
+    },
+    "s03": {
+      "role_name": 5
+    },
+    "s04": {
+      "role_name": 5
+    },
+    "s05": {
+      "label_text": 5
+    },
+    "s06": {
+      "text_exact": 5
+    }
+  },
+  "duration_ms": {
+    "min": 2240,
+    "median": 2259,
+    "max": 2347
+  },
+  "iterations": [
+    {
+      "run_id": "replay_20260914T074315Z_5a1d09",
+      "status": "success",
+      "outcome_code": null,
+      "rungs": {
+        "s02": "role_name",
+        "s03": "role_name",
+        "s04": "role_name",
+        "s05": "label_text",
+        "s06": "text_exact"
+      },
+      "outputs_digest": "9d56b5179a92b526e8496f9a522aaea00668501dd1e14dcdde3fb268f420863f",
+      "duration_ms": 2347,
+      "conditions": {}
+    },
+    {
+      "run_id": "replay_20260914T074317Z_ab6587",
+      "status": "success",
+      "outcome_code": null,
+      "rungs": {
+        "s02": "role_name",
+        "s03": "role_name",
+        "s04": "role_name",
+        "s05": "label_text",
+        "s06": "text_exact"
+      },
+      "outputs_digest": "9d56b5179a92b526e8496f9a522aaea00668501dd1e14dcdde3fb268f420863f",
+      "duration_ms": 2245,
+      "conditions": {}
+    },
+    {
+      "run_id": "replay_20260914T074320Z_675dd8",
+      "status": "success",
+      "outcome_code": null,
+      "rungs": {
+        "s02": "role_name",
+        "s03": "role_name",
+        "s04": "role_name",
+        "s05": "label_text",
+        "s06": "text_exact"
+      },
+      "outputs_digest": "9d56b5179a92b526e8496f9a522aaea00668501dd1e14dcdde3fb268f420863f",
+      "duration_ms": 2240,
+      "conditions": {}
+    },
+    {
+      "run_id": "replay_20260914T074322Z_4970c8",
+      "status": "success",
+      "outcome_code": null,
+      "rungs": {
+        "s02": "role_name",
+        "s03": "role_name",
+        "s04": "role_name",
+        "s05": "label_text",
+        "s06": "text_exact"
+      },
+      "outputs_digest": "9d56b5179a92b526e8496f9a522aaea00668501dd1e14dcdde3fb268f420863f",
+      "duration_ms": 2259,
+      "conditions": {}
+    },
+    {
+      "run_id": "replay_20260914T074324Z_221d6f",
+      "status": "success",
+      "outcome_code": null,
+      "rungs": {
+        "s02": "role_name",
+        "s03": "role_name",
+        "s04": "role_name",
+        "s05": "label_text",
+        "s06": "text_exact"
+      },
+      "outputs_digest": "9d56b5179a92b526e8496f9a522aaea00668501dd1e14dcdde3fb268f420863f",
+      "duration_ms": 2311,
+      "conditions": {}
+    }
+  ],
+  "note": "outputs_digest is an HMAC under a key that existed only in memory for this report: equal digests mean equal outputs, and a digest cannot be reversed to a value."
+}

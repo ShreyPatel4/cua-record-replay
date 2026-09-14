@@ -785,7 +785,7 @@ class ReplayEngine:
             stop = RunStopped(
                 outcome.code,
                 detector.description,
-                expected=f"none of the conditions {detector.id} recognizes",
+                expected=self._expected_of(step),
                 observed=f"{describe(detector.when)}; {self._where(_frame_of(detector.when))}",
             )
             raise self._escalate(stop, "HARD_FAILURE_ESCALATE") if outcome.escalate else stop

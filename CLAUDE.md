@@ -354,6 +354,12 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   optional input the flow uses are refusals, not crashes; undeclared input values are masked.
 - Redactor: dollar amounts are masked at any length, number tokens never match inside a longer
   number (4.0.00), short credentials carry base64 forms, identities carry JSON-escaped forms.
+- Found while producing the evidence: a detector's description is the caller-facing message, so
+  review rationale (why two detectors are unscoped) belongs in `review_notes`, not descriptions;
+  and a hard-failure detector's `expected` is now what the step was waiting for.
+- `@1.1.0` was approved as "Shrey Patel" under the delegated decisions, after the review fixes and
+  the full gate; the committed replay evidence ran against the approved file without
+  `--allow-draft`.
 - Left as documented limits: pre-run refusals have no screenshot, snapshot, or trace (no browser
   opened, by design); `--repeat` from the CLI records no harness conditions, so a self-clearing
   injection reads as nondeterministic there; the 3 s profile wait held under CPU load in the

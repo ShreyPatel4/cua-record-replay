@@ -1,0 +1,92 @@
+{
+  "status": "recovered_then_success",
+  "capability_id": "coreledger.member.read_savings_balance",
+  "capability_version": "1.1.0",
+  "tenant": null,
+  "run_id": "replay_20260914T074259Z_6a80cf",
+  "started_at": "2026-09-14T07:42:59.872882Z",
+  "duration_ms": 7506,
+  "inputs": {
+    "member_number": "*0007"
+  },
+  "outputs": {
+    "savings_balance": "[REDACTED]"
+  },
+  "outcome_code": null,
+  "message": null,
+  "field_errors": [],
+  "step_reached": "s06",
+  "expected": null,
+  "observed": null,
+  "steps": [
+    {
+      "step_id": "s01",
+      "action": "navigate",
+      "resolved_rung": null,
+      "resolved_strategy": null,
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 256
+    },
+    {
+      "step_id": "s02",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 368
+    },
+    {
+      "step_id": "s03",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 408
+    },
+    {
+      "step_id": "s04",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 225
+    },
+    {
+      "step_id": "s05",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 353
+    },
+    {
+      "step_id": "s06",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "text_exact",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 5382
+    }
+  ],
+  "recoveries": [
+    {
+      "type": "automatic",
+      "step_id": "s06",
+      "detector_id": "od_slow_member_load",
+      "code": "SLOW_LOAD",
+      "recovery_kind": "wait_retry",
+      "attempts": 1,
+      "succeeded": true,
+      "duration_ms": 2136
+    }
+  ],
+  "warnings": [],
+  "evidence_dir": "evidence/replay_20260914T074259Z_6a80cf",
+  "intervention_path": null
+}

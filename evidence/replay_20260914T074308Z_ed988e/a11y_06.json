@@ -1,0 +1,410 @@
+{
+  "nodes": [
+    {
+      "ref": "e1",
+      "role": "document",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [],
+      "box": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1280.0,
+        "h": 800.0
+      },
+      "clickable": false,
+      "depth": 0
+    },
+    {
+      "ref": "e2",
+      "role": "generic",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [],
+      "box": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1280.0,
+        "h": 800.0
+      },
+      "clickable": false,
+      "depth": 1
+    },
+    {
+      "ref": "e3",
+      "role": "iframe",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [],
+      "box": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1280.0,
+        "h": 48.0
+      },
+      "clickable": false,
+      "depth": 2
+    },
+    {
+      "ref": "f1e2",
+      "role": "table",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 1272.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 3
+    },
+    {
+      "ref": "f1e3",
+      "role": "rowgroup",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 1272.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 4
+    },
+    {
+      "ref": "f1e4",
+      "role": "row",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 1272.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 5
+    },
+    {
+      "ref": "f1e5",
+      "role": "cell",
+      "name": "CoreLedger Member Services 4.2.1",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 728.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f1e6",
+      "role": "cell",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 732.0,
+        "y": 4.0,
+        "w": 544.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f1e7",
+      "role": "link",
+      "name": "Member search",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 1040.0,
+        "y": 6.0,
+        "w": 138.0,
+        "h": 19.0
+      },
+      "clickable": true,
+      "depth": 7
+    },
+    {
+      "ref": null,
+      "role": "text",
+      "name": "",
+      "text": "|",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": null,
+      "clickable": false,
+      "depth": 7
+    },
+    {
+      "ref": "f1e8",
+      "role": "link",
+      "name": "Sign out",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "banner"
+      ],
+      "box": {
+        "x": 1197.0,
+        "y": 6.0,
+        "w": 75.0,
+        "h": 19.0
+      },
+      "clickable": true,
+      "depth": 7
+    },
+    {
+      "ref": "e4",
+      "role": "iframe",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [],
+      "box": {
+        "x": 0.0,
+        "y": 49.0,
+        "w": 1280.0,
+        "h": 751.0
+      },
+      "clickable": false,
+      "depth": 2
+    },
+    {
+      "ref": "f2e2",
+      "role": "table",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 4.0,
+        "y": 53.0,
+        "w": 1272.0,
+        "h": 116.0
+      },
+      "clickable": false,
+      "depth": 3
+    },
+    {
+      "ref": "f2e3",
+      "role": "rowgroup",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 56.0,
+        "w": 1266.0,
+        "h": 110.0
+      },
+      "clickable": false,
+      "depth": 4
+    },
+    {
+      "ref": "f2e4",
+      "role": "row",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 56.0,
+        "w": 1266.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 5
+    },
+    {
+      "ref": "f2e5",
+      "role": "cell",
+      "name": "Access denied",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 56.0,
+        "w": 1266.0,
+        "h": 23.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f2e6",
+      "role": "row",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 81.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 5
+    },
+    {
+      "ref": "f2e7",
+      "role": "cell",
+      "name": "Your operator role cannot open restricted member records.",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 81.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f2e8",
+      "role": "row",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 110.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 5
+    },
+    {
+      "ref": "f2e9",
+      "role": "cell",
+      "name": "Error 403. Contact your security officer if you believe this is wrong.",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 110.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f2e10",
+      "role": "row",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 139.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 5
+    },
+    {
+      "ref": "f2e11",
+      "role": "cell",
+      "name": "",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 7.0,
+        "y": 139.0,
+        "w": 1266.0,
+        "h": 27.0
+      },
+      "clickable": false,
+      "depth": 6
+    },
+    {
+      "ref": "f2e12",
+      "role": "link",
+      "name": "Back to search",
+      "text": "",
+      "value_present": false,
+      "frame_path": [
+        "main"
+      ],
+      "box": {
+        "x": 11.0,
+        "y": 143.0,
+        "w": 118.0,
+        "h": 19.0
+      },
+      "clickable": true,
+      "depth": 7
+    }
+  ],
+  "frame_urls": {
+    "": "http://127.0.0.1:5050/",
+    "banner": "http://127.0.0.1:5050/banner",
+    "main": "http://127.0.0.1:5050/members/*0013"
+  }
+}

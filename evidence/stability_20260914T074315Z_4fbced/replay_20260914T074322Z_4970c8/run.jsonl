@@ -1,0 +1,36 @@
+{"ts": "2026-09-14T07:43:22.600+00:00", "actor": "replay", "event": "run_started", "capability": "coreledger.member.read_savings_balance", "version": "1.1.0", "status": "approved", "tenant": null, "inputs": {"member_number": "*0007"}, "steps": ["s01", "s02", "s03", "s04", "s05", "s06"]}
+{"ts": "2026-09-14T07:43:22.600+00:00", "actor": "replay", "event": "step_started", "step_id": "s01", "action": "navigate", "description": "Open the application entry page.", "rerun": false}
+{"ts": "2026-09-14T07:43:22.777+00:00", "actor": "policy", "event": "decision", "step_id": "s01", "action": "navigate", "decision": {"kind": "allow", "risk": "safe"}}
+{"ts": "2026-09-14T07:43:22.778+00:00", "actor": "replay", "event": "act", "step_id": "s01", "action": "navigate", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 177}
+{"ts": "2026-09-14T07:43:22.815+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s01", "wait": "checkpoint", "checkpoint": "cp_operator_sign_in", "duration_ms": 36}
+{"ts": "2026-09-14T07:43:22.910+00:00", "actor": "replay", "event": "step_started", "step_id": "s02", "action": "type_text", "description": "Enter {{secrets.operator_id}} into 'Operator ID'.", "rerun": false}
+{"ts": "2026-09-14T07:43:22.924+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s02", "target": "step", "rung": 0, "strategy": "role_name", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "role_name", "matches": 1}]}
+{"ts": "2026-09-14T07:43:22.934+00:00", "actor": "policy", "event": "decision", "step_id": "s02", "action": "type_text", "decision": {"kind": "allow", "risk": "reversible"}}
+{"ts": "2026-09-14T07:43:22.935+00:00", "actor": "replay", "event": "act", "step_id": "s02", "action": "type_text", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 4}
+{"ts": "2026-09-14T07:43:23.267+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s02", "wait": "settle", "checkpoint": null, "duration_ms": 331}
+{"ts": "2026-09-14T07:43:23.325+00:00", "actor": "replay", "event": "step_started", "step_id": "s03", "action": "type_text", "description": "Enter {{secrets.operator_password}} into 'Password'.", "rerun": false}
+{"ts": "2026-09-14T07:43:23.339+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s03", "target": "step", "rung": 0, "strategy": "role_name", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "role_name", "matches": 1}]}
+{"ts": "2026-09-14T07:43:23.390+00:00", "actor": "policy", "event": "decision", "step_id": "s03", "action": "type_text", "decision": {"kind": "allow", "risk": "reversible"}}
+{"ts": "2026-09-14T07:43:23.390+00:00", "actor": "replay", "event": "act", "step_id": "s03", "action": "type_text", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 46}
+{"ts": "2026-09-14T07:43:23.721+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s03", "wait": "settle", "checkpoint": null, "duration_ms": 330}
+{"ts": "2026-09-14T07:43:23.784+00:00", "actor": "replay", "event": "step_started", "step_id": "s04", "action": "click", "description": "Click 'Sign in'.", "rerun": false}
+{"ts": "2026-09-14T07:43:23.797+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s04", "target": "step", "rung": 0, "strategy": "role_name", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "role_name", "matches": 1}]}
+{"ts": "2026-09-14T07:43:23.985+00:00", "actor": "policy", "event": "decision", "step_id": "s04", "action": "click", "decision": {"kind": "allow", "risk": "safe"}}
+{"ts": "2026-09-14T07:43:23.985+00:00", "actor": "replay", "event": "act", "step_id": "s04", "action": "click", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 182}
+{"ts": "2026-09-14T07:43:24.002+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s04", "wait": "checkpoint", "checkpoint": "cp_member_lookup", "duration_ms": 16}
+{"ts": "2026-09-14T07:43:24.067+00:00", "actor": "replay", "event": "step_started", "step_id": "s05", "action": "type_text", "description": "Enter {{inputs.member_number}} into the textbox labelled 'Member number'.", "rerun": false}
+{"ts": "2026-09-14T07:43:24.077+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s05", "target": "step", "rung": 0, "strategy": "label_text", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "label_text", "matches": 1}]}
+{"ts": "2026-09-14T07:43:24.087+00:00", "actor": "policy", "event": "decision", "step_id": "s05", "action": "type_text", "decision": {"kind": "allow", "risk": "reversible"}}
+{"ts": "2026-09-14T07:43:24.087+00:00", "actor": "replay", "event": "act", "step_id": "s05", "action": "type_text", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 3}
+{"ts": "2026-09-14T07:43:24.418+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s05", "wait": "settle", "checkpoint": null, "duration_ms": 330}
+{"ts": "2026-09-14T07:43:24.484+00:00", "actor": "replay", "event": "step_started", "step_id": "s06", "action": "click", "description": "Click 'Find'. The 3 s checkpoint wait is deliberate: a slow profile is handled by od_slow_member_load's bounded wait_retry, not by a long blind wait.", "rerun": false}
+{"ts": "2026-09-14T07:43:24.506+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s06", "target": "step", "rung": 0, "strategy": "text_exact", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "text_exact", "matches": 1}]}
+{"ts": "2026-09-14T07:43:24.694+00:00", "actor": "policy", "event": "decision", "step_id": "s06", "action": "click", "decision": {"kind": "allow", "risk": "safe"}}
+{"ts": "2026-09-14T07:43:24.694+00:00", "actor": "replay", "event": "act", "step_id": "s06", "action": "click", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 182}
+{"ts": "2026-09-14T07:43:24.728+00:00", "actor": "replay", "event": "wait_passed", "step_id": "s06", "wait": "checkpoint", "checkpoint": "cp_member_profile", "duration_ms": 33}
+{"ts": "2026-09-14T07:43:24.829+00:00", "actor": "replay", "event": "success_verified", "checkpoint": "cp_member_profile"}
+{"ts": "2026-09-14T07:43:24.851+00:00", "actor": "replay", "event": "target_resolved", "step_id": "s06", "target": "output:savings_balance", "rung": 0, "strategy": "anchor_relative", "recorded_rung": 0, "drift": false, "identity_changed": false, "matches": [{"strategy": "anchor_relative", "matches": 1}]}
+{"ts": "2026-09-14T07:43:24.859+00:00", "actor": "policy", "event": "decision", "step_id": "s06", "action": "read_text", "decision": {"kind": "allow", "risk": "safe"}}
+{"ts": "2026-09-14T07:43:24.859+00:00", "actor": "replay", "event": "act", "step_id": "s06", "action": "read_text", "ok": true, "code": null, "message": "", "events": [], "duration_ms": 2}
+{"ts": "2026-09-14T07:43:24.859+00:00", "actor": "replay", "event": "output_extracted", "output": "savings_balance", "type": "money", "sensitive": true}
+{"ts": "2026-09-14T07:43:24.859+00:00", "actor": "replay", "event": "run_finished", "status": "success", "outcome_code": null, "step_reached": "s06", "duration_ms": 2259, "recoveries": 0, "warnings": 0}
