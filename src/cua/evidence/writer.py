@@ -75,6 +75,10 @@ class EvidenceWriter:
             self._sensitive.add(name)
         return name
 
+    def flag_sensitive(self, name: str) -> None:
+        """Mark a file sensitive after the fact, such as a screenshot showing a sensitive output."""
+        self._sensitive.add(name)
+
     def snapshot(self, name: str, snapshot: A11ySnapshot) -> str:
         data = snapshot.redacted(self._redactor.text).model_dump(mode="json")
         return self.write_json(name, data)
@@ -102,9 +106,9 @@ class EvidenceWriter:
         manifest = {
             "run_id": self.run_id,
             "files": files,
-            "purge_note": "Files flagged sensitive are screenshots of sign-in pages. Screenshots "
-            "are not image-redacted; delete flagged files before sharing evidence outside the "
-            "team.",
+            "purge_note": "Files flagged sensitive are screenshots of sign-in pages or of screens "
+            "showing a sensitive output. Screenshots are not image-redacted; delete flagged files "
+            "before sharing evidence outside the team.",
         }
         path = self.dir / "manifest.json"
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

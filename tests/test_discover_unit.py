@@ -265,6 +265,16 @@ def test_a_literal_inside_a_longer_word_is_not_a_parameter() -> None:
     assert propose_parameters(record) == []
 
 
+def test_a_value_learned_mid_run_is_masked_from_then_on() -> None:
+    redactor = Redactor([])
+    assert redactor.text("balance $4,210.55") == "balance $4,210.55"
+    redactor.add_secret("$4,210.55")
+    redactor.add_secret("4210.55")
+    assert redactor.text("balance $4,210.55, raw 4210.55") == "balance [REDACTED], raw [REDACTED]"
+    with pytest.raises(ValueError, match="shorter"):
+        redactor.add_secret("$12")
+
+
 def test_evidence_is_redacted_and_the_manifest_flags_sign_in_screenshots(tmp_path: Path) -> None:
     redactor = Redactor(["planted-password-123"], identities=["teller-0417"])
     writer = EvidenceWriter(tmp_path, "disc_test", redactor, sensitive_pages=["/login"])

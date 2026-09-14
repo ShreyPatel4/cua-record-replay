@@ -215,6 +215,53 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   with no identity change (`test_the_hand_written_example_resolves_on_the_live_app`). The example
   gained `fingerprint.kind` on its targets (additive, still 1.0.0 draft).
 
+## Phase 3 decisions (discovery)
+
+- Loop per turn: observe (screenshot plus the snapshot passed through the redactor) -> model ->
+  parse -> GatedSurface -> settle -> observe. Only the latest screen is sent in full; older ones are
+  elided. `tool_choice` is `auto` with parallel tool use off: `any` prefills the reply, so the model
+  never writes the one-sentence rationale the run log keeps. A reply with no tool call is answered
+  with "Call exactly one tool."
+- Tools are Pydantic models that also generate the schemas. A malformed call becomes a tool error the
+  model reads; it never crashes a run. Beyond the kickoff's ten: `select_option(ref, option)`,
+  because the sub-account form has a native select, and `click.dialog` (accept or dismiss), allowed
+  only after an earlier click on the same element reported the dialog's message (the surface
+  dismisses unexpected dialogs). The recorded message pattern is that exact message, anchored.
+- Secrets: the model types `{{secrets.name}}` templates and never sees values. A credential goes
+  only into a field that looks like a credential field, and a literal typed into a credential
+  field is refused.
+- Recording: a target's ladder is recorded before the action, on the screen the model saw. A
+  literal the model typed that the goal also names becomes a proposed input (name from the field's
+  label, a digit pattern for digit strings). A human confirms at the end, by prompt or `--yes`; a
+  declined literal stays literal. `cua discover` refuses to start without a terminal or `--yes`.
+- Waits: type and select steps settle. Other steps wait on a derived checkpoint: the first new
+  interface text in the next target's frame (not data, not a control's label, not a typed literal)
+  plus the next target present. The last step waits on the success checkpoint: that text, each
+  accepted input's template when its value is on screen, and the output and done targets present.
+  The success checkpoint must hold on the final screen or the draft is not saved.
+- Drafts have no outcome detectors. One happy run cannot observe not-found, interstitial, slow,
+  expiry, or app errors, so review adds them and tunes timeouts; `review_notes` says so.
+- Outputs are recorded sensitive. From `declare_output` on, the value (and its bare number forms)
+  is added to the redactor, so logs and the model's later screens mask it; `read_text` contents are
+  never logged; screenshots from that screen on are flagged sensitive in the manifest.
+- Stuck: the same call three times running (refs compared by frame, role, and name), or two acting
+  turns running with no snapshot digest change, plus max steps, timeout, and give_up. Until phase 5
+  a stuck run stops with status `stopped`, exit 2, and keeps its last accessibility snapshot.
+- The SDK's own retries are off; the loop retries a transient error (connection, timeout, 408, 409,
+  429, 529, 5xx) exactly once and fails the run on the second.
+- `request_confirmation` is denied unless `--allow-irreversible`; with it, it arms confirmation for
+  the next irreversible action only, via `GatedSurface.perform(confirmed=True)`. `escalate` handling
+  is never satisfied, and the model is told to give up rather than work around it.
+- `settle` counts its own call as activity. Found by probe: an observation right after a submit
+  could still show the sign-in page because the request event arrived after the first idle check.
+- Evidence: `evidence/<run_id>/` with `run.jsonl`, `step_NN.png`, `result.json`, `manifest.json`,
+  `artifact.capability.json`, and `a11y_NN.json` when stopped. `--evidence-root` defaults to
+  `evidence/_scratch`, which is gitignored.
+- Limit for REPORT.md: names and other free text are not detected, so the synthetic member's name
+  appears in the model's rationale.
+- The first real run was deleted (empty rationale, balance in the log). Both were fixed with tests
+  and the run was redone as `evidence/disc_20260914T051827Z_51db/`.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in

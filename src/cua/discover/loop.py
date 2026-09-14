@@ -47,8 +47,9 @@ from cua.locate.recorder import Recording, looks_like_data, record
 from cua.locate.resolver import Resolved, resolve
 from cua.policy.enforce import GatedSurface
 from cua.policy.models import RequiresConfirmation
-from cua.policy.redact import Redactor
+from cua.policy.redact import MIN_SECRET_LEN, Redactor
 from cua.replay.extract import ExtractionError, parse_value
+from cua.replay.result import MoneyValue
 from cua.surface.base import (
     A11ySnapshot,
     Action,
@@ -158,6 +159,7 @@ class _Screen:
     turn: int
     snapshot: A11ySnapshot
     png: bytes
+    screenshot: str
 
 
 @dataclass
@@ -176,6 +178,7 @@ class _Outcome:
     stop: StopReason | None = None
     step: ObservedStep | None = None
     log: dict[str, Any] = field(default_factory=dict)
+    logged: str | None = None  # what evidence records instead of text, when text is page data
 
 
 class DiscoveryLoop:
@@ -204,6 +207,8 @@ class DiscoveryLoop:
         self._dialogs_seen: dict[tuple[object, ...], tuple[str, str]] = {}
         self._confirmation_armed = False
         self._record: DiscoveryRecord | None = None
+        self._screen_name = ""
+        self._shows_sensitive_output = False
 
     # ---- the loop -------------------------------------------------------------------------------
 
@@ -331,7 +336,7 @@ class DiscoveryLoop:
                 turn=turn,
                 tool=use.name,
                 ok=not outcome.is_error,
-                message=text,
+                message=text if outcome.logged is None else self._redactor.text(outcome.logged),
                 duration_ms=int((self._clock() - acted_at) * 1000),
                 **outcome.log,
             )
@@ -414,6 +419,9 @@ class DiscoveryLoop:
         name = self._evidence.screenshot(
             f"step_{turn:02d}.png", png, page_urls=snapshot.frame_urls.values()
         )
+        if self._shows_sensitive_output:
+            self._evidence.flag_sensitive(name)
+        self._screen_name = name
         self._evidence.event(
             "discovery",
             "observation",
@@ -423,7 +431,7 @@ class DiscoveryLoop:
             digest=snapshot.digest[:12],
             nodes=len(snapshot.nodes),
         )
-        return _Screen(turn=turn, snapshot=snapshot, png=png)
+        return _Screen(turn=turn, snapshot=snapshot, png=png, screenshot=name)
 
     def _final_evidence(self, screen: _Screen | None) -> None:
         """A stopped run keeps the accessibility snapshot it stopped on, redacted."""
@@ -719,7 +727,7 @@ class DiscoveryLoop:
         text, problem = self._read_element_text(found[0])
         if text is None:
             return _Outcome(problem, is_error=True)
-        return _Outcome(f"Text: {text}")
+        return _Outcome(f"Text: {text}", logged=f"Read {len(text)} characters; not logged.")
 
     def _declare(self, call: DeclareOutputCall, snapshot: A11ySnapshot) -> _Outcome:
         if any(o.name == call.name for o in self._outputs):
@@ -732,7 +740,7 @@ class DiscoveryLoop:
         if text is None:
             return _Outcome(problem, is_error=True)
         try:
-            parse_value(text, _PARSE[call.type])
+            value = parse_value(text, _PARSE[call.type])
         except ExtractionError as exc:
             return _Outcome(
                 f"That element's text does not parse as {call.type}: {exc}. Declare the element "
@@ -743,8 +751,18 @@ class DiscoveryLoop:
         if isinstance(recording, str):
             return _Outcome(recording, is_error=True)
         self._outputs.append(DeclaredOutput(call.name, call.type, recording))
+        # Outputs are recorded sensitive, so the value is masked in everything written from here on
+        # (logs, the model's own later screens) and screenshots showing it are flagged.
+        forms = {" ".join(text.split())}
+        if isinstance(value, MoneyValue):
+            forms |= {f"{abs(value.amount):,.2f}", f"{abs(value.amount):.2f}"}
+        for form in forms:
+            if len(form) >= MIN_SECRET_LEN:
+                self._redactor.add_secret(form)
+        self._evidence.flag_sensitive(self._screen_name)
+        self._shows_sensitive_output = True
         return _Outcome(
-            f"Declared output {call.name} ({call.type}); it reads {text}.",
+            f"Declared output {call.name} ({call.type}); its text parses as {call.type}.",
             log=self._ladder_log(recording) | {"output": call.name},
         )
 

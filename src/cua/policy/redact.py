@@ -104,6 +104,12 @@ class Redactor:
             identities=[source[name] for name in identity_env_vars if source.get(name)],
         )
 
+    def add_secret(self, value: str) -> None:
+        """Mask a value learned during a run, such as a sensitive output, from now on."""
+        _check_length(value)
+        forms = {value, quote(value, safe=""), quote_plus(value), json.dumps(value)[1:-1]}
+        self._substrings = sorted(set(self._substrings) | forms, key=len, reverse=True)
+
     def text(self, value: str) -> str:
         for form in self._substrings:
             value = value.replace(form, REDACTED)

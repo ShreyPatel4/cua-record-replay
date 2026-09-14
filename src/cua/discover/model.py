@@ -90,7 +90,10 @@ class AnthropicModel:
                 max_tokens=self._max_tokens,
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 tools=cast(Any, tools),
-                tool_choice={"type": "any", "disable_parallel_tool_use": True},
+                # auto, not any: forcing a tool prefills the reply, so the model never writes the
+                # sentence the run log keeps as its rationale. The loop answers a reply with no
+                # tool call by asking for one.
+                tool_choice={"type": "auto", "disable_parallel_tool_use": True},
                 messages=cast(Any, messages),
             )
         except anthropic.APIConnectionError as exc:

@@ -19,6 +19,7 @@ from cua.artifact.schema import AllOf, CheckpointWait, ElementPresent, TextPrese
 from cua.discover.model import ModelTurn, ToolUse
 from cua.discover.record import ParamProposal, SecretSpec
 from cua.discover.run import DiscoverRequest, DiscoveryResult, run_discovery
+from mock_app.data import money
 from mock_app.server import RunningMockApp
 from mock_app.settings import MockSettings
 
@@ -261,7 +262,13 @@ def test_the_model_and_the_evidence_never_see_secrets_or_full_member_numbers(
     manifest = json.loads((evidence / "manifest.json").read_text())
     flagged = {f["path"] for f in manifest["files"] if f["sensitive"]}
     assert "step_00.png" in flagged, "the sign-in screen is a sensitive page"
-    assert "step_05.png" not in flagged
+    assert "step_05.png" in flagged, "the screen showing the sensitive output"
+    assert "step_04.png" not in flagged
+    log = (evidence / "run.jsonl").read_text()
+    savings = coreledger.state.ledger.members["10007"].savings
+    for form in (money(savings), f"{savings:,.2f}", f"{savings:.2f}"):
+        assert form not in log, "the declared balance never reaches the log"
+    assert "Scripted move" in log, "the model's rationale does"
 
 
 def test_a_declined_parameter_stays_a_literal(
