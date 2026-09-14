@@ -283,3 +283,54 @@ def test_unknown_parent_and_missing_handling_are_rejected() -> None:
 def test_malformed_policy_entries_are_rejected(entry: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         PolicyFile.model_validate({"policies": {"a": entry}})
+
+
+def test_subresources_are_judged_on_origin_and_deny_lists_only(readonly: PolicyGate) -> None:
+    def fetch(url: str) -> object:
+        return readonly.check(_act(phase="subresource", navigate_url=url))
+
+    assert fetch(f"{BASE}/static/site.css") == Allow(risk="safe"), "paths_allow does not apply"
+    control = fetch(f"{BASE}/__control/api/reset")
+    assert isinstance(control, Block)
+    assert "paths_deny" in control.reason
+    assert isinstance(fetch("http://evil.example/collect?d=1"), Block)
+    with pytest.raises(ValidationError, match="request phases need navigate_url"):
+        _act(phase="subresource")
+
+
+def test_enter_on_a_target_is_judged_like_a_click(subaccount: PolicyGate) -> None:
+    form = f"{BASE}/members/10007/subaccounts/new"
+    pressed = subaccount.check(
+        _act(action="press_key", key="Enter", frame_url=form, target_text="Create sub-account")
+    )
+    assert isinstance(pressed, RequiresConfirmation)
+    assert subaccount.check(_act(action="press_key", key="Tab", frame_url=form)) == Allow(
+        risk="safe"
+    )
+
+
+def test_url_rules_see_the_destination_of_a_navigation() -> None:
+    file = PolicyFile.model_validate(
+        {
+            "policies": {
+                "p": {
+                    "origins": [BASE],
+                    "paths_allow": ["/**"],
+                    "actions_allow": ["click"],
+                    "risk": {
+                        "irreversible_when": [{"url_matches": "/members/*/subaccounts/create"}]
+                    },
+                    "irreversible_handling": "escalate",
+                }
+            }
+        }
+    )
+    gate = PolicyGate(resolve_policy(file, "p"))
+    navigation = gate.check(
+        _act(
+            phase="navigation",
+            frame_url=f"{BASE}/members/10007/subaccounts/new",
+            navigate_url=f"{BASE}/members/10007/subaccounts/create",
+        )
+    )
+    assert isinstance(navigation, RequiresConfirmation)

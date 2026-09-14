@@ -16,8 +16,8 @@ from cua.surface.base import (
     ActResult,
     DialogGuard,
     Element,
-    NavigationGuard,
     Observation,
+    RequestGuard,
     SurfaceEvent,
 )
 
@@ -39,7 +39,7 @@ class DesktopSurface:
     - act: UIA Invoke, Value, SelectionItem and ExpandCollapse patterns (AXPress, AXValue on
       macOS), falling back to synthesized input at the element center.
     - policy hooks: no URLs, so navigate steps and url_matches or status_code conditions are
-      rejected by the schema; the navigation guard becomes a window-title and process allowlist,
+      rejected by the schema; the request guard becomes a window-title and process allowlist,
       and native modal dialogs are answered through the same dialog guard.
     """
 
@@ -60,7 +60,7 @@ class DesktopSurface:
     def act(self, action: Action, *, dialog_guard: DialogGuard | None = None) -> ActResult:
         self._unbuilt()
 
-    def install_navigation_guard(self, guard: NavigationGuard) -> None:
+    def install_request_guard(self, guard: RequestGuard) -> None:
         self._unbuilt()
 
     def drain_events(self) -> list[SurfaceEvent]:

@@ -62,7 +62,8 @@ FramePath = Annotated[
     list[FrameName],
     Field(
         description="Frame names from the top document down. [] is the top document; #N is an "
-        "unnamed frame by index."
+        "unnamed frame by index, which shifts if sibling frames are added. A frame's id attribute "
+        "counts as its name when it has no name attribute."
     ),
 ]
 Confidence = Annotated[
@@ -88,12 +89,14 @@ class LabelTextRung(Strict):
     )
     label: str = Field(
         min_length=1,
-        description="The label element's own innerText, whitespace-collapsed, exact match.",
+        description="The label's own text without the text of controls inside it, dash- and "
+        "whitespace-normalized and case-folded.",
     )
     relation: Literal["wrapped", "same_row", "below"] = Field(
-        description="Where the control sits relative to the label: inside it, in a later cell of "
-        "the label's nearest table row, or the nearest control starting under the label's bottom "
-        "edge and overlapping it horizontally."
+        description="Where the control sits relative to the label: inside it; the first matching "
+        "control after the label in its table row (off tables, the nearest one to its right in "
+        "its vertical band); or the nearest control starting under the label's bottom edge and "
+        "overlapping it horizontally. Controls tied for that position are all matches."
     )
     control: Literal["textbox", "combobox", "checkbox"] = Field(
         description="Kind of control expected at that position."
@@ -138,7 +141,10 @@ class AnchorRelativeRung(Strict):
         "handler. text: an element with non-empty own innerText."
     )
     nth: int = Field(
-        default=1, ge=1, description="1-based position in the distance ordering after filtering."
+        default=1,
+        ge=1,
+        description="1-based slot in the distance ordering after filtering. Every candidate tied "
+        "with that slot's distance is a match, so a tie fails the one-match rule.",
     )
     confidence: Confidence
 
@@ -187,13 +193,19 @@ class Fingerprint(Strict):
         description="HTML input type seen at record time, e.g. password. A password type marks the "
         "target as a credential field however it is labelled.",
     )
+    kind: Literal["input", "select", "checkbox", "clickable", "text"] | None = Field(
+        default=None,
+        description="What sort of element it was. Replay only accepts a match of the same kind, so "
+        "a fallback rung cannot land on, say, an empty cell where a button used to be.",
+    )
 
 
 class Target(Strict):
     ladder: list[Rung] = Field(
         min_length=1,
         description="Rungs tried top to bottom on every replay; a rung wins only when exactly one "
-        "visible element matches.",
+        "visible element of the fingerprint's kind, role, and input type matches. Visible means "
+        "rendered, not visibility:hidden, not under opacity:0, and not entirely off the page.",
     )
     recorded_rung: int = Field(
         ge=0,
@@ -220,6 +232,11 @@ class Target(Strict):
             )
         if all(r.strategy == "bbox" for r in self.ladder):
             raise ValueError("a target needs at least one rung that is not raw coordinates")
+        has_bbox = any(r.strategy == "bbox" for r in self.ladder)
+        if has_bbox and self.fingerprint.role is None and self.fingerprint.name is None:
+            raise ValueError(
+                "a bbox rung needs a fingerprint role or name to check its hit against"
+            )
         if self.looks_sensitive and self.fingerprint.text is not None:
             raise ValueError("a credential target must not record its text in the fingerprint")
         return self
@@ -776,6 +793,7 @@ LOCKED_STEP_PATHS = frozenset(
         "dialog",
         "target.fingerprint.role",
         "target.fingerprint.input_type",
+        "target.fingerprint.kind",
     }
 )
 

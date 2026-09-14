@@ -62,7 +62,8 @@
             "main"
           ],
           "fingerprint": {
-            "role": "cell"
+            "role": "cell",
+            "kind": "text"
           },
           "notes": "The value changes per member, so no text rung can exist. The label cell 'Share Savings' is fixed vendor text and the amount sits in the next cell of the same row. Fingerprint deliberately omits the recorded amount."
         },
@@ -111,7 +112,8 @@
         ],
         "fingerprint": {
           "role": "textbox",
-          "name": "Operator ID"
+          "name": "Operator ID",
+          "kind": "input"
         },
         "notes": "The sign-in page came from a later vendor patch with real wrapped labels, so the accessible name is reliable; the label rung covers a renamed aria name."
       },
@@ -152,7 +154,8 @@
         "fingerprint": {
           "role": "textbox",
           "name": "Password",
-          "input_type": "password"
+          "input_type": "password",
+          "kind": "input"
         },
         "notes": "Same labelled sign-in form. The password input type marks this a credential field however a tenant relabels it, so the schema only accepts a credential secret here and never records the field's text."
       },
@@ -194,7 +197,8 @@
         ],
         "fingerprint": {
           "role": "button",
-          "name": "Sign in"
+          "name": "Sign in",
+          "kind": "clickable"
         },
         "notes": "A real submit input, so role and name are strong. The anchor rung is a weak backup: the first clickable below the password field."
       },
@@ -243,7 +247,8 @@
           "main"
         ],
         "fingerprint": {
-          "role": "textbox"
+          "role": "textbox",
+          "kind": "input"
         },
         "notes": "No accessible name: the label is a sibling table cell, so role_name is unavailable. Both text rungs key on the 'Member number' label, which the vendor has kept stable across builds. The box was measured at 1280x800 and is a last resort."
       },
@@ -294,7 +299,8 @@
         "fingerprint": {
           "role": "cell",
           "name": "Find",
-          "text": "Find"
+          "text": "Find",
+          "kind": "clickable"
         },
         "notes": "A span with an onclick handler that the accessibility tree reports only as cell \"Find\", so role_name cannot tell it from a data cell. Exact text is primary. The same-row anchor on the label survives a relabel or a moved cell, and resolving through it on replay raises a drift warning."
       },
@@ -347,7 +353,8 @@
                 "main"
               ],
               "fingerprint": {
-                "role": "textbox"
+                "role": "textbox",
+                "kind": "input"
               },
               "notes": "Same control as s05; presence proves the search form rendered, not just its heading."
             }
@@ -393,7 +400,8 @@
                 "main"
               ],
               "fingerprint": {
-                "role": "cell"
+                "role": "cell",
+                "kind": "text"
               },
               "notes": "The output's own target. Requiring it visible makes success mean the value is actually readable."
             }
@@ -568,7 +576,8 @@
           "fingerprint": {
             "role": "cell",
             "name": "OK",
-            "text": "OK"
+            "text": "OK",
+            "kind": "clickable"
           },
           "notes": "'OK' alone is a common word, so confidence is low; it is only evaluated after s06, where the notice is the only OK on screen."
         }
@@ -605,7 +614,8 @@
             "fingerprint": {
               "role": "cell",
               "name": "OK",
-              "text": "OK"
+              "text": "OK",
+              "kind": "clickable"
             },
             "notes": "Same control as the trigger."
           },

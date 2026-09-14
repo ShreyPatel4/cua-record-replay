@@ -1,6 +1,6 @@
 """GatedSurface: the only code that calls Surface.act, so no action anywhere skips the policy gate.
 
-It judges each action before it happens, then judges every navigation and dialog the action causes.
+It judges each action before it happens, then every request and dialog the action causes.
 """
 
 from __future__ import annotations
@@ -15,10 +15,18 @@ from cua.surface.base import (
     ActResult,
     DialogInfo,
     Navigate,
-    NavigationRequest,
+    PressKey,
+    RequestCheck,
     Surface,
+    SurfaceError,
 )
 from cua.vocab import ActionType, RiskClass
+
+_PHASE_FOR_REQUEST: dict[str, Literal["navigation", "subresource"]] = {
+    "navigation": "navigation",
+    "redirect": "navigation",
+    "subresource": "subresource",
+}
 
 
 class GatedSurface:
@@ -37,14 +45,14 @@ class GatedSurface:
         *,
         confirm_irreversible: bool = False,
     ) -> None:
-        self.surface = surface
+        self._surface = surface
         self._backend = backend
         self._gate = gate
         self._confirm = confirm_irreversible
         self._last_action: ActionType = "navigate"
         self._declared: RiskClass = "safe"
         self._target_text: str | None = None
-        surface.install_navigation_guard(self._navigation_guard)
+        surface.install_request_guard(self._request_guard)
 
     def _refusal(self, decision: PolicyDecision) -> str | None:
         if isinstance(decision, Block):
@@ -58,18 +66,22 @@ class GatedSurface:
     def perform(self, action: Action, *, declared_risk: RiskClass = "safe") -> ActResult:
         element = getattr(action, "element", None)
         target_text = None
-        if element is not None:
-            facts = self._backend.describe(element)
-            target_text = facts.name or facts.own_text or None
-            frame_url = self.surface.frame_url(element.frame_path)
-        else:
-            frame_url = self.surface.frame_url(()) or "about:blank"
+        try:
+            if element is not None:
+                facts = self._backend.describe(element)
+                target_text = facts.name or facts.own_text or None
+                frame_url = self._surface.frame_url(element.frame_path)
+            else:
+                frame_url = self._surface.frame_url(()) or "about:blank"
+        except SurfaceError as exc:
+            return ActResult(ok=False, action=action.kind, code="ACTION_FAILED", message=str(exc))
         proposed = ProposedAction(
             phase="action",
             action=action.kind,
             frame_url=frame_url,
             navigate_url=action.url if isinstance(action, Navigate) else None,
             target_text=target_text,
+            key=action.key if isinstance(action, PressKey) else None,
             declared_risk=declared_risk,
         )
         decision = self._gate.check(proposed)
@@ -82,14 +94,14 @@ class GatedSurface:
         self._last_action = action.kind
         self._declared = declared_risk
         self._target_text = target_text
-        return self.surface.act(action, dialog_guard=self._dialog_guard)
+        return self._surface.act(action, dialog_guard=self._dialog_guard)
 
-    def _navigation_guard(self, request: NavigationRequest) -> str | None:
+    def _request_guard(self, check: RequestCheck) -> str | None:
         proposed = ProposedAction(
-            phase="navigation",
+            phase=_PHASE_FOR_REQUEST[check.kind],
             action=self._last_action,
-            frame_url=request.frame_url,
-            navigate_url=request.url,
+            frame_url=check.frame_url or "about:blank",
+            navigate_url=check.url,
         )
         return self._refusal(self._gate.check(proposed))
 

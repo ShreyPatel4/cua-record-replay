@@ -12,7 +12,7 @@ from typing import Annotated, Literal, Self
 import yaml
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from cua.vocab import ActionType, RiskClass
+from cua.vocab import ActionType, KeyName, RiskClass
 
 
 class PolicyModel(BaseModel):
@@ -188,14 +188,15 @@ def load_policy(path: Path, policy_id: str) -> Policy:
 class ProposedAction(PolicyModel):
     """Everything the gate needs to judge one action, gathered by the caller before acting.
 
-    One step can reach the gate three times: before the action, when a document navigation it
-    caused is about to be requested, and when a native dialog it opened is about to be answered.
+    One step can reach the gate many times: before the action, for every request it causes, and
+    when a native dialog it opened is about to be answered.
     """
 
-    phase: Literal["action", "navigation", "dialog"] = Field(
+    phase: Literal["action", "navigation", "subresource", "dialog"] = Field(
         default="action",
-        description="action: before the surface acts. navigation: a frame document request the "
-        "page started (click, submit, redirect), intercepted before it is sent. dialog: a native "
+        description="action: before the surface acts. navigation: a frame document request or "
+        "redirect hop, judged before the browser follows it. subresource: any other request "
+        "(fetch, XHR, images), judged on origin, paths_deny, and query_deny only. dialog: a native "
         "dialog about to be answered, with its real message.",
     )
     action: ActionType = Field(description="Action being performed, or that caused this phase.")
@@ -204,6 +205,9 @@ class ProposedAction(PolicyModel):
         default=None, description="Destination, for navigate actions and the navigation phase."
     )
     target_text: str | None = Field(default=None, description="Visible text or name of the target.")
+    key: KeyName | None = Field(
+        default=None, description="Key for press_key. Enter on a target is judged like a click."
+    )
     dialog_message: str | None = Field(
         default=None,
         description="Dialog message. In the action phase this is the artifact's declared "
@@ -218,9 +222,9 @@ class ProposedAction(PolicyModel):
 
     @model_validator(mode="after")
     def _phase_shape(self) -> Self:
-        needs_destination = self.phase == "navigation" or self.action == "navigate"
+        needs_destination = self.phase in ("navigation", "subresource") or self.action == "navigate"
         if needs_destination and self.navigate_url is None:
-            raise ValueError("navigate actions and the navigation phase need navigate_url")
+            raise ValueError("navigate actions and request phases need navigate_url")
         if self.phase == "dialog" and (self.dialog_message is None or self.dialog_response is None):
             raise ValueError("the dialog phase needs dialog_message and dialog_response")
         return self

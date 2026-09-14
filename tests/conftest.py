@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
+from cua.session.state import NotInControl
+from cua.surface.playwright import PlaywrightSurface
 from mock_app.injections import DEFAULT, Default
 from mock_app.server import RunningMockApp, run_in_thread
 from mock_app.settings import MockSettings
@@ -69,3 +71,26 @@ def page(browser: Browser) -> Iterator[Page]:
     context = browser.new_context(viewport={"width": 1280, "height": 800})
     yield context.new_page()
     context.close()
+
+
+class HandOff:
+    """A control callable the tests flip, the way SessionState will: automation or a human holds."""
+
+    def __init__(self) -> None:
+        self.holder = "automation"
+
+    def __call__(self) -> None:
+        if self.holder != "automation":
+            raise NotInControl(f"controller is {self.holder}, not automation")
+
+
+@pytest.fixture
+def hand_off() -> HandOff:
+    return HandOff()
+
+
+@pytest.fixture
+def surface(browser: Browser, hand_off: HandOff) -> Iterator[PlaywrightSurface]:
+    opened = PlaywrightSurface.launch(browser, control=hand_off)
+    yield opened
+    opened.close()

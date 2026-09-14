@@ -71,6 +71,12 @@ class PolicyGate:
         self.policy = policy
 
     def check(self, proposed: ProposedAction) -> PolicyDecision:
+        if proposed.phase == "subresource":
+            assert proposed.navigate_url is not None
+            reason = self.url_block_reason(proposed.navigate_url, require_allow=False)
+            if reason is None:
+                return Allow(risk="safe")
+            return Block(reason=f"subresource {reason}", risk="safe")
         risk = max_risk(proposed.declared_risk, self._classify(proposed))
         if proposed.action not in self.policy.actions_allow:
             return Block(reason=f"action {proposed.action!r} is not in actions_allow", risk=risk)
@@ -94,7 +100,8 @@ class PolicyGate:
             )
         return Allow(risk=risk)
 
-    def url_block_reason(self, url: str) -> str | None:
+    def url_block_reason(self, url: str, *, require_allow: bool = True) -> str | None:
+        """Why a URL is off policy, or None. require_allow=False skips paths_allow."""
         if "\\" in url:
             return f"url {url!r} contains a backslash"
         parts = urlsplit(url)
@@ -117,7 +124,7 @@ class PolicyGate:
         for glob in self.policy.paths_deny:
             if path_matches(glob, path):
                 return f"path {path} matches paths_deny {glob}"
-        if not any(path_matches(glob, path) for glob in self.policy.paths_allow):
+        if require_allow and not any(path_matches(glob, path) for glob in self.policy.paths_allow):
             return f"path {path} matches no paths_allow entry"
         for name, _ in parse_qsl(parts.query, keep_blank_values=True):
             for pattern in self.policy.query_deny:
@@ -141,17 +148,27 @@ class PolicyGate:
     @staticmethod
     def _rule_matches(rule: RiskRule, proposed: ProposedAction) -> bool:
         if rule.action is not None and rule.action != proposed.action:
-            return False
+            pressed_like_click = (
+                rule.action == "click"
+                and proposed.action == "press_key"
+                and proposed.key == "Enter"
+                and proposed.target_text is not None
+            )
+            if not pressed_like_click:
+                return False
         if rule.target_text_matches is not None and not re.search(
             rule.target_text_matches, proposed.target_text or ""
         ):
             return False
         if rule.url_matches is not None:
+            urls = [proposed.frame_url]
+            if proposed.phase == "navigation" and proposed.navigate_url is not None:
+                urls.append(proposed.navigate_url)
             try:
-                frame_path = normalize_path(urlsplit(proposed.frame_url).path)
+                paths = [normalize_path(urlsplit(url).path) for url in urls]
             except UnsafePath:
                 return True
-            if not path_matches(rule.url_matches, frame_path):
+            if not any(path_matches(rule.url_matches, path) for path in paths):
                 return False
         if rule.dialog_message_matches is not None and not re.search(
             rule.dialog_message_matches, proposed.dialog_message or ""

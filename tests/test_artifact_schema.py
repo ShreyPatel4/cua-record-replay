@@ -413,3 +413,16 @@ def test_tenant_patches_cannot_touch_locked_fields(
 ) -> None:
     data["tenant_overrides"] = {"maple-cu": {"description": "d", "steps": patch}}
     _rejects(data, re.escape(f"'{locked}'"))
+
+
+def test_a_bbox_rung_needs_something_to_check_its_hit_against(data: dict[str, Any]) -> None:
+    fingerprint = _step(data, "s06")["target"]["fingerprint"]
+    fingerprint.pop("role")
+    fingerprint.pop("name")
+    _rejects(data, "bbox rung needs a fingerprint role or name")
+
+
+def test_tenant_patches_cannot_change_the_recorded_kind(data: dict[str, Any]) -> None:
+    patch = {"s06": {"target": {"fingerprint": {"kind": "text"}}}}
+    data["tenant_overrides"] = {"maple-cu": {"description": "d", "steps": patch}}
+    _rejects(data, re.escape("'target.fingerprint.kind'"))

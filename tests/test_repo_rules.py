@@ -5,6 +5,7 @@ No em dashes in authored text or artifacts (evidence is exempt); no stable selec
 
 from __future__ import annotations
 
+import ast
 import re
 
 from support import ROOT, candidate_files
@@ -36,16 +37,30 @@ def test_mock_templates_carry_no_stable_selectors() -> None:
 
 
 def test_only_the_gated_surface_calls_surface_act() -> None:
-    """The policy gate is the only path to Surface.act (kickoff test matrix, policy row)."""
-    call = re.compile(r"\.act\(")
-    offenders = [
-        f"{path.relative_to(ROOT)}:{number}"
-        for path in sorted((ROOT / "src").rglob("*.py"))
-        if path.name != "enforce.py"
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if call.search(line)
-    ]
-    assert not offenders, f"Surface.act called outside policy/enforce.py: {offenders}"
+    """The policy gate is the only path to Surface.act (kickoff test matrix, policy row).
+
+    Walks the syntax tree, so aliases and getattr(obj, "act") count too, and raw element handles
+    may only be touched inside the surface package that produced them.
+    """
+    enforce = ROOT / "src" / "cua" / "policy" / "enforce.py"
+    surface_dir = ROOT / "src" / "cua" / "surface"
+    offenders = []
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            where = f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', 0)}"
+            names_act = (isinstance(node, ast.Attribute) and node.attr == "act") or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and any(isinstance(a, ast.Constant) and a.value == "act" for a in node.args)
+            )
+            if names_act and path != enforce:
+                offenders.append(f"act at {where}")
+            touches_handle = isinstance(node, ast.Attribute) and node.attr == "handle"
+            if touches_handle and surface_dir not in path.parents:
+                offenders.append(f"element handle at {where}")
+    assert not offenders, f"gate bypass: {offenders}"
 
 
 def test_replay_never_imports_a_model_client() -> None:

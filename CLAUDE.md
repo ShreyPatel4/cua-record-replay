@@ -67,7 +67,7 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - Irreversibility keys on the accepted dialog (gate `phase="dialog"`), not on the POST target.
 - Perception facts from the probe stand: `aria_snapshot(mode="ai", boxes=True)` walks frames, refs
   are reassigned every snapshot and never enter an artifact, and a narrow DOM pass flags `onclick`
-  spans and tds because ai-mode does not mark them.
+  spans and tds because ai-mode marks them inconsistently.
 
 ## Phase 1 contract decisions (pushbacks on the kickoff sketch)
 
@@ -131,6 +131,89 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - `artifacts/example.capability.json` is the hand-written reference; the catalog does not list it
   but it replays by path. Catalog files are `<id>@<version>.capability.json`. Artifacts follow the
   no-em-dash rule; only `evidence/` is exempt.
+
+## Phase 2 decisions (surface and locators, revised after the phase 2 review)
+
+- Contracts: `surface/base.py` holds the `Surface` protocol (observe, snapshot, screenshot,
+  `act(action, dialog_guard)`, `install_request_guard`, `drain_events`, `element_for_ref`,
+  `frame_url`/`frame_text`/`frame_status`, `settle`). `locate/backend.py` holds `LocatorBackend`
+  (`candidates`, `same_element`, `describe`): the ladder defines the port, each surface implements
+  it. Frames are the web's containers; a desktop surface maps frame paths onto window paths.
+  `DesktopSurface` is a stub whose docstring maps UIA, AX, and AT-SPI onto the same rungs.
+- `PlaywrightSurface.launch(browser, control=...)` owns its context, created with
+  `accept_downloads=False` and `service_workers="block"`. `control` is required and raises
+  `NotInControl` unless automation holds the session; every act and every read calls it.
+- Perception: the page-root `aria_snapshot(mode="ai", boxes=True)` is parsed into nodes. Boxes inside
+  a frame are frame-relative in that text, so the parser adds the frame's content offset (box plus
+  border). Playwright single-quotes lines whose text contains `: ` or ` #`; the parser unwraps them.
+  Input values never become node text: textbox-like nodes keep only `value_present` and a salted
+  in-process digest (excluded from serialization) so the snapshot digest still notices typing.
+  `A11ySnapshot.redacted(redactor)` masks names, text, and URLs for the model and evidence.
+- Click handlers: ai-mode marks them inconsistently, so a DOM pass finds every clickable. A handler
+  marks the smallest node containing it (ties to the deeper node) when that node's label is the
+  handler's text; otherwise (a span inside a paragraph) it becomes its own `clickable` node with a
+  `c<N>` ref the surface resolves.
+- A wrapper around exactly one control with the same visible text stands for that control: the
+  aria `cell "Find"` and the span that owns the handler are one target.
+- Rung matching lives in `surface/locator.js`, one script for recorder and resolver. Text is dash-
+  and whitespace-normalized and case-folded. Visible means rendered, not visibility:hidden, not
+  under opacity:0, and not entirely off the page. `label_text` `same_row` is the first matching
+  control after the label in its table row, or off tables the nearest one in its vertical band.
+  Position rules (`anchor_relative`, `below` labels, off-table rows) return every candidate tied
+  for the chosen slot, so ties fail the one-match rule instead of picking by DOM order. `bbox`
+  never returns frame or body elements. Accessible names approximate WAI-ARIA accname
+  (labelledby, aria-label, label without its controls' text, placeholder, title, image alt).
+- Resolver: a candidate counts only if its kind, role, and input type match the fingerprint
+  (`Fingerprint.kind` is new: input, select, checkbox, clickable, text). A fallback therefore
+  cannot land on an empty cell where a button was. A renamed winner still resolves (layout drift
+  turns Find into Search) but sets `identity_changed`, which replay treats with caution. A bbox
+  rung needs a fingerprint role or name (schema-enforced). Ambiguous rungs are skipped;
+  `TARGET_AMBIGUOUS` only when nothing won and a rung was ambiguous.
+- Recorder: every candidate rung is resolved on the live page and kept only if it finds exactly
+  this element. `role_name` is skipped for non-semantic roles; the browser's own role and name from
+  the snapshot node are tried first. Text that looks like data (amounts, 3+ digit runs, dates) is
+  never used in any rung or anchor. `sensitive` or `volatile_text` drops text rungs and fingerprint
+  name and text for content-named elements; form controls keep their label-derived name. A weak
+  target is flagged; coordinates alone are a `RecordingError`.
+- Gate wiring: `GatedSurface` (`policy/enforce.py`) is the only caller of `Surface.act`, and code
+  outside `surface/` may not touch element handles; a repo test walks the syntax tree to enforce
+  both. The request guard installs once. Every request leaving the page goes through a
+  context-level route (popups included):
+  - frame documents are judged before sending; a refused one is answered with HTTP 204, which
+    cancels the navigation and keeps the current document (an abort would show the browser error
+    page);
+  - the first redirect hop is fetched by the surface (`route.fetch(max_redirects=0)`) and its
+    Location judged before the browser follows it, so a sign-in redirect to a denied path never
+    loads; later hops of a chain are followed without routing and are detected, not prevented;
+  - every other request (fetch, XHR, images) is judged on origin, `paths_deny`, and `query_deny`
+    only (new `subresource` phase), so a page script cannot call a denied endpoint or another
+    origin while same-origin assets still load;
+  - popups are closed; a popup whose first request was refused never loads, and Playwright never
+    surfaces it to close, so the guarantee is that it cannot reach the denied page;
+  - download links never reach routing or request events, so an init script cancels them in the
+    page and reinstalls itself after `document.open()` rewrites (a page rewritten from an isolated
+    world, like Playwright's own `set_content`, is not covered);
+  - `data:`, `blob:`, and other non-http documents cannot be prevented by routing and are reported
+    as `navigation_off_policy`; from such a document the frame's own navigations fail the gate, so
+    recovery is a top-level navigation.
+- Dialogs: only answered while an act is in flight, and only the expected one (type and message
+  pattern), after the gate. A click that expects a dialog waits for it or fails with "expected
+  dialog did not appear", and the expectation is cleared when the act returns, so a later confirm
+  is never auto-accepted. Anything else is dismissed and reported.
+- Events carry the id of the act they belong to (the latest act when they arrived). An act's result
+  holds only its own events; late arrivals and strays stay in `drain_events` with their id.
+- Human control: the request guard and the dialog handler step aside, so the human's navigation is
+  not gated and their confirm is theirs to answer. Automation reads and acts both raise
+  `NotInControl`. Control is checked before an act, not during a long one; phase 5 takes control
+  only between acts.
+- `settle` means no document, XHR, or fetch request in flight plus a DOM mutation quiet period,
+  measured by an init script in every frame and polled every 50 ms.
+- `confirm_irreversible` satisfies `confirm` handling only; `escalate` always refuses. Enter on a
+  target is judged like a click, and URL risk rules in the navigation phase also match the
+  destination.
+- Every target in `artifacts/example.capability.json` resolves at its recorded rung on the live mock
+  with no identity change (`test_the_hand_written_example_resolves_on_the_live_app`). The example
+  gained `fingerprint.kind` on its targets (additive, still 1.0.0 draft).
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
