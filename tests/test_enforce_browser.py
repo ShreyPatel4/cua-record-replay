@@ -11,7 +11,7 @@ from playwright.sync_api import Frame, expect
 
 from cua.policy.enforce import GatedSurface
 from cua.policy.gate import PolicyGate
-from cua.policy.models import load_policy
+from cua.policy.models import RiskRule, load_policy
 from cua.session.state import NotInControl
 from cua.surface.base import (
     ActResult,
@@ -133,6 +133,46 @@ def test_a_navigation_that_starts_just_after_a_click_is_judged_inside_that_act(
     assert result.code == "POLICY_BLOCKED"
     assert [e.kind for e in result.events] == ["navigation_blocked"]
     assert "/members/search" in main.url
+
+
+@pytest.mark.parametrize("run", range(6))
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_a_real_frame_link_is_judged_inside_its_click_every_time(
+    surface: PlaywrightSurface,
+    coreledger: RunningMockApp,
+    mock_settings: MockSettings,
+    confirmed: bool,
+    run: int,
+) -> None:
+    """The review probe's race with no injected delay: a plain link whose request reaches routing on
+    the browser's own timing. Unconfirmed, the block lands inside the act; confirmed, the one-call
+    grant is still live when the request arrives, so it is never lost to a late refusal."""
+    base = load_policy(POLICY_FILE, "coreledger-subaccount")
+    rules = [RiskRule(url_matches="/members/*/subaccounts/new"), *base.risk.irreversible_when]
+    policy = base.model_copy(
+        update={
+            "origins": [coreledger.base_url],
+            "risk": base.risk.model_copy(update={"irreversible_when": rules}),
+        }
+    )
+    gated = GatedSurface(surface, surface, PolicyGate(policy))
+    main = _sign_in(surface, coreledger.base_url, mock_settings)
+    main.goto(coreledger.base_url + "/members/10007")
+    expect(main.get_by_role("link", name="Open sub-account")).to_be_visible()
+
+    result = gated.perform(Click(_by_name(surface, "Open sub-account")), confirmed=confirmed)
+    surface.settle(quiet_ms=300, timeout_ms=5000)
+    late = [e.kind for e in surface.drain_events()]
+
+    assert late == [], f"run {run}: events landed after the act: {late}"
+    if confirmed:
+        assert result.ok, f"run {run}: {result.code} {result.message}"
+        assert main.url.endswith("/members/10007/subaccounts/new")
+    else:
+        assert result.ok is False
+        assert result.code == "POLICY_BLOCKED"
+        assert [e.kind for e in result.events] == ["navigation_blocked"]
+        assert main.url.endswith("/members/10007")
 
 
 def test_a_redirect_off_policy_is_refused_before_the_browser_follows_it(
