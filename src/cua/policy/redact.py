@@ -43,6 +43,11 @@ _AMOUNT_RE = re.compile(
 )
 
 
+_MONEY_FORM_RE = re.compile(
+    r"\(?-?\s*\$\s?(?P<num>[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?P<frac>\.[0-9]{2})?\)?"
+)
+
+
 def _token_pattern(tokens: set[str]) -> re.Pattern[str] | None:
     if not tokens:
         return None
@@ -96,6 +101,9 @@ class Redactor:
         for identity in identities:
             _check_length(identity)
             tokens |= {identity, quote(identity, safe=""), quote_plus(identity)}
+            # Base64 of an identity is gibberish, so matching it anywhere cannot over-redact, and
+            # traces store some captured values base64-encoded.
+            substrings |= base64_forms(identity.encode())
         # Longest first so an encoded form containing a raw form is replaced whole.
         self._substrings = sorted(substrings, key=len, reverse=True)
         self._token_values = tokens
@@ -123,6 +131,36 @@ class Redactor:
         _check_length(value)
         self._token_values = self._token_values | {value}
         self._tokens = _token_pattern(self._token_values)
+
+    def add_value(self, text: str) -> None:
+        """Mask a sensitive value read off the screen, plus the bare number forms of an amount,
+        so "$4,210.55" also hides "4,210.55" and "4210.55". Forms too short to redact are skipped.
+        """
+        shown = " ".join(text.split())
+        forms = {shown}
+        match = _MONEY_FORM_RE.fullmatch(shown)
+        if match is not None:
+            number, frac = match.group("num"), match.group("frac") or ""
+            forms |= {number + frac, number.replace(",", "") + frac}
+        for form in forms:
+            if len(form) >= MIN_SECRET_LEN:
+                self.add_secret(form)
+
+    def scrub_bytes(self, data: bytes) -> bytes:
+        """Replace secret values, in every encoding the redactor knows, inside raw bytes.
+
+        For binary evidence such as trace archives: account numbers are left alone, because
+        masking digit runs would corrupt timestamps and offsets in machine-readable files.
+        """
+        for form in self._substrings:
+            data = data.replace(form.encode(), REDACTED.encode())
+        if self._token_values:
+            alternation = b"|".join(
+                re.escape(t.encode()) for t in sorted(self._token_values, key=len, reverse=True)
+            )
+            pattern = re.compile(rb"(?<![A-Za-z0-9])(?:" + alternation + rb")(?![A-Za-z0-9])")
+            data = pattern.sub(REDACTED.encode(), data)
+        return data
 
     def free_text(self, value: str) -> str:
         """Prose written about the screen, such as a model's rationale: amounts are masked too."""

@@ -32,7 +32,6 @@ def test_ops_help_lists_the_control_transfer_commands() -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        ["replay", "artifacts/example.capability.json"],
         ["ops", "take-control", "run_x"],
     ],
 )

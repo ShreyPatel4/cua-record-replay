@@ -108,3 +108,27 @@ def test_free_text_masks_amounts_that_app_text_keeps() -> None:
     assert redactor.free_text(prose) == (
         "Balance reads [AMOUNT] ([AMOUNT] or [AMOUNT]), build 4.2.1 at 05:18:15.004"
     )
+
+
+def test_an_identity_is_scrubbed_from_base64_bodies_at_every_alignment() -> None:
+    """Found on a real trace: route.fetch stores the sign-in POST body base64-encoded."""
+    import base64
+
+    from cua.policy.redact import REDACTED, Redactor
+
+    redactor = Redactor(identities=["teller-0417"])
+    for prefix in (b"", b"a", b"ab", b"next=&operator="):
+        body = base64.b64encode(prefix + b"teller-0417&password=x")
+        scrubbed = redactor.scrub_bytes(body)
+        assert REDACTED.encode() in scrubbed
+        assert base64.b64encode(b"teller-0417").rstrip(b"=")[:12] not in scrubbed
+
+
+def test_a_sensitive_amount_hides_its_bare_number_forms_as_whole_tokens() -> None:
+    from cua.policy.redact import Redactor
+
+    redactor = Redactor()
+    redactor.add_value("$4,210.55")
+    assert redactor.text("saw $4,210.55, 4,210.55 and 4210.55 but not 14210.55") == (
+        "saw [REDACTED], [REDACTED] and [REDACTED] but not 14210.55"
+    )

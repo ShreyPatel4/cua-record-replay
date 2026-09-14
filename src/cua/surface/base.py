@@ -9,6 +9,7 @@ import hashlib
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -331,4 +332,18 @@ class Surface(Protocol):
         """True once no document, XHR, or fetch request is in flight, none started or finished for
         quiet_ms (counted from the call, so a navigation an act just fired is waited for), and the
         DOM is quiet."""
+        ...
+
+    def wait(self, ms: int) -> None:
+        """Let time pass while the surface keeps handling its events (routes, dialogs). Never a
+        bare sleep: a blocked event loop would stall the request guard mid-navigation."""
+        ...
+
+    def start_trace(self) -> None:
+        """Begin recording a replayable trace of the session (a Playwright trace on the web)."""
+        ...
+
+    def stop_trace(self, path: Path | None) -> bool:
+        """Stop recording; write the trace to path, or discard it when path is None. False when
+        no trace was running."""
         ...

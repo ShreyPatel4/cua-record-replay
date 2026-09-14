@@ -43,6 +43,8 @@ ENGINE_CODES = PRE_RUN_CODES | frozenset(
     {
         "TARGET_NOT_FOUND",
         "TARGET_AMBIGUOUS",
+        "TARGET_CHANGED",
+        "ACTION_FAILED",
         "CHECKPOINT_TIMEOUT",
         "POLICY_BLOCKED",
         "UNEXPECTED_DIALOG",

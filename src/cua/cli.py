@@ -13,6 +13,7 @@ from cua.log import configure_logging
 
 if TYPE_CHECKING:
     from cua.artifact.catalog import Catalog
+    from cua.artifact.schema import Capability
     from cua.discover.record import SecretSpec
     from cua.discover.run import ConfirmParams
 
@@ -178,19 +179,112 @@ def discover(
     raise typer.Exit(code=0 if result.status == "recorded" else 2)
 
 
+def _load_for_replay(artifact: str, version: str | None, root: Path) -> "Capability":
+    from cua.artifact.catalog import Catalog, CatalogError, load_capability
+
+    path = Path(artifact)
+    try:
+        if path.suffix == ".json" or path.exists():
+            return load_capability(path)
+        capability, _ = Catalog(root).get(artifact, version, include_drafts=True)
+    except (CatalogError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    return capability
+
+
+def _pairs(raw: list[str], option: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for item in raw:
+        name, sep, value = item.partition("=")
+        if not sep or not name or name in pairs:
+            typer.echo(f"{option} {item!r}: expected a unique name=value", err=True)
+            raise typer.Exit(code=1)
+        pairs[name] = value
+    return pairs
+
+
 @app.command()
 def replay(
-    artifact: Annotated[Path, typer.Argument(help="Capability JSON file or catalog id.")],
+    artifact: Annotated[
+        str,
+        typer.Argument(help="Capability JSON file, or a catalog id."),
+    ],
     inputs: Annotated[
         list[str] | None, typer.Option("--input", "-i", help="name=value, repeatable.")
     ] = None,
+    version: Annotated[
+        str | None, typer.Option(help="Catalog version. Defaults to the latest.")
+    ] = None,
+    tenant: Annotated[str | None, typer.Option(help="Apply this tenant's overrides.")] = None,
     repeat: Annotated[int, typer.Option(min=1, help="Run N times and report stability.")] = 1,
-    allow_draft: Annotated[bool, typer.Option()] = False,
-    confirm_irreversible: Annotated[bool, typer.Option()] = False,
+    expect: Annotated[
+        str, typer.Option(help="What a passing --repeat iteration is: success or business_outcome.")
+    ] = "success",
+    allow_draft: Annotated[
+        bool, typer.Option(help="Replay a capability not yet approved.")
+    ] = False,
+    confirm_irreversible: Annotated[
+        bool, typer.Option(help="Allow irreversible steps under confirm handling.")
+    ] = False,
     headed: Annotated[bool, typer.Option()] = False,
+    evidence_root: Annotated[Path, typer.Option(help="Where run directories go.")] = Path(
+        "evidence/_scratch"
+    ),
+    artifacts: Annotated[Path, typer.Option(help="Catalog directory.")] = ARTIFACTS_DIR,
 ) -> None:
-    """Replay a capability deterministically, with no model in the loop."""
-    _not_yet("replay", 4)
+    """Replay a capability deterministically, with no model in the loop.
+
+    Prints the ReplayResult (or, with --repeat, the stability report) as JSON. Exit 0 for success
+    and business outcomes, 2 for a hard failure, 3 when escalated.
+    """
+    import json
+    import os
+
+    from playwright.sync_api import sync_playwright
+
+    from cua.replay.run import ReplayRequest, run_replay, run_stability, stability_summary
+    from cua.surface.playwright import PlaywrightSurface
+
+    if expect not in ("success", "business_outcome"):
+        typer.echo("--expect must be success or business_outcome", err=True)
+        raise typer.Exit(code=1)
+    capability = _load_for_replay(artifact, version, artifacts)
+    request = ReplayRequest(
+        capability=capability,
+        inputs=_pairs(inputs or [], "--input"),
+        policy_file=POLICY_FILE,
+        evidence_root=evidence_root,
+        tenant=tenant,
+        allow_draft=allow_draft,
+        confirm_irreversible=confirm_irreversible,
+    )
+    with sync_playwright() as pw:
+        chromium = pw.chromium.launch(headless=not headed)
+        try:
+
+            def open_surface() -> PlaywrightSurface:
+                return PlaywrightSurface.launch(chromium, control=lambda: None)
+
+            if repeat == 1:
+                result = run_replay(request, environ=os.environ, open_surface=open_surface)
+                typer.echo(result.model_dump_json(indent=2))
+                code = result.exit_code
+            else:
+                report, path = run_stability(
+                    request,
+                    repeat=repeat,
+                    environ=os.environ,
+                    open_surface=open_surface,
+                    expected_status="business_outcome"
+                    if expect == "business_outcome"
+                    else "success",
+                )
+                typer.echo(json.dumps({**stability_summary(report), "report": str(path)}, indent=2))
+                code = 0 if report.passes == repeat else 2
+        finally:
+            chromium.close()
+    raise typer.Exit(code=code)
 
 
 @ops_app.command("list")
@@ -322,6 +416,72 @@ def mock_serve(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     serve_forever(settings, host=host, port=port)
+
+
+BaseUrlOption = Annotated[str, typer.Option(help="Where CoreLedger is running.")]
+
+
+def _control(base_url: str, action: str, body: dict[str, object]) -> None:
+    """POST to the CoreLedger control API. Replay policy denies /__control; this is the harness."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(  # noqa: S310 - a local harness URL the operator typed
+        f"{base_url.rstrip('/')}/__control/api/{action}",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+            typer.echo(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        typer.echo(f"{action} refused: {exc.read().decode()}", err=True)
+        raise typer.Exit(code=1) from exc
+    except urllib.error.URLError as exc:
+        typer.echo(f"cannot reach {base_url}: {exc.reason}; is `cua mock serve` running?", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@mock_app_cli.command("inject")
+def mock_inject(
+    name: Annotated[str, typer.Argument(help="Injection name, e.g. interstitial or slow.")],
+    times: Annotated[
+        str | None,
+        typer.Option(help="Uses before it clears itself, or 'none' for until cleared."),
+    ] = None,
+    param: Annotated[
+        list[str] | None, typer.Option(help="name=value, repeatable, e.g. --param ms=5000.")
+    ] = None,
+    base_url: BaseUrlOption = "http://127.0.0.1:5050",
+) -> None:
+    """Arm a failure injection on a running CoreLedger."""
+    body: dict[str, object] = {"name": name, "params": _pairs(param or [], "--param")}
+    if times is not None:
+        if times.lower() in ("none", "null"):
+            body["times"] = None
+        elif times.isdigit():
+            body["times"] = int(times)
+        else:
+            typer.echo("--times must be a positive integer or none", err=True)
+            raise typer.Exit(code=1)
+    _control(base_url, "arm", body)
+
+
+@mock_app_cli.command("clear")
+def mock_clear(
+    name: Annotated[str, typer.Argument(help="Injection to disarm.")],
+    base_url: BaseUrlOption = "http://127.0.0.1:5050",
+) -> None:
+    """Disarm one failure injection."""
+    _control(base_url, "clear", {"name": name})
+
+
+@mock_app_cli.command("reset")
+def mock_reset(base_url: BaseUrlOption = "http://127.0.0.1:5050") -> None:
+    """Disarm every injection and drop sub-accounts opened since start."""
+    _control(base_url, "reset", {})
 
 
 @mock_app_cli.command("smoke")

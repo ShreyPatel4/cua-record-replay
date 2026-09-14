@@ -70,3 +70,15 @@ def test_replay_never_imports_a_model_client() -> None:
         if re.search(r"^\s*(import|from)\s+(anthropic|cua\.discover)", path.read_text(), re.M)
     ]
     assert not offenders
+
+
+def test_replay_never_imports_a_browser_backend() -> None:
+    """The flow must not know it runs in a browser: replay sees surface contracts only."""
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in sorted((ROOT / "src" / "cua" / "replay").rglob("*.py"))
+        if re.search(
+            r"^\s*(import|from)\s+(playwright|cua\.surface\.playwright)", path.read_text(), re.M
+        )
+    ]
+    assert not offenders

@@ -288,6 +288,42 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
   fixed) the run was redone as `evidence/disc_20260914T055730Z_9596/` so the committed evidence
   matches the reviewed recorder.
 
+## Phase 4 decisions (replay)
+
+- `replay/engine.py` sees only the surface, locator, and gate contracts, and nothing under `replay/`
+  imports Playwright (repo test). `replay/run.py` takes a surface factory; the CLI builds it.
+- Artifact `coreledger.member.read_savings_balance@1.1.0` is the hand review of the 1.0.0 draft:
+  the example's seven detectors ported and renamed (`member_number`, `cp_member_profile`), s06's
+  wait cut to 3 s. Written by hand, not by a tool; `check_version` confirms a minor bump.
+- Poll loop: each tick drains surface events (a refused request is POLICY_BLOCKED, an unexpected
+  dialog UNEXPECTED_DIALOG), runs in-scope detectors, then the check. Target resolution polls the
+  same way. `checkpoint_timeout` detectors run once per deadline; a wait_retry window sets its own
+  trigger aside, so it cannot re-trigger itself. Click and run_steps recoveries settle 300 ms (so a
+  sign-in still redirecting is not read as a second expiry) and restart the interrupted wait with
+  its full timeout. Settle waits poll detectors between settle attempts of quiet_ms plus 250 ms.
+- New engine codes: `ACTION_FAILED` (a failed act, retried within the step timeout unless the step
+  is irreversible or answers a dialog) and `TARGET_CHANGED` (a renamed target on an irreversible
+  step; on a safe step it is a drift warning). `DriftWarning.identity_changed` is new.
+- Escalation passes through one hook. Until the session controller exists, `no_operator` turns it
+  into `hard_failure` with the escalating code and a message that a human is needed, so
+  permission_denied and app_error return exit 2 in phase 4. Phase 5 rewires the hook.
+- Pre-run refusals, in order: tenant, approval, policy (load and fit), inputs, secrets. Each is a
+  hard_failure with no step_reached, writes result.json and a manifest, and opens no browser.
+- Evidence: `step_NN.png` after every step, `a11y_NN.json` on failure, `trace.zip` on hard_failure
+  and escalated only. Tracing runs from step 1, so a failure during sign-in still has a trace
+  (the advisor suggested starting after sign-in; that would leave early failures without one).
+  The raw archive lives in a temp dir; `evidence/trace.py` writes a copy with every secret form
+  replaced in every member and cookie and auth header values blanked, flagged sensitive. Found on
+  the first real trace: `route.fetch` keeps the sign-in POST body base64-encoded, and identities
+  had no base64 forms, so the operator id survived. Identities now carry base64 forms.
+- Sensitive outputs: the read text and its bare number forms go into the redactor before parsing;
+  result.json goes through `for_evidence`; screenshots from the success step on are flagged. A
+  failure trace on the profile page can hold the balance in its DOM snapshots; traces are flagged.
+- `cua mock inject|clear|reset` drive the control API so evidence runs are reproducible commands.
+  Replay itself never touches `/__control`; the policy denies it.
+- `cua replay --repeat N` writes `stability_<ts>/` with each run and `stability.json` (passes, rung
+  distribution, duration spread, determinism, HMAC output digests under an in-memory key).
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in

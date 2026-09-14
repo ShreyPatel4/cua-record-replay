@@ -119,6 +119,11 @@ class DriftWarning(ResultModel):
     recorded_rung: int = Field(ge=0, description="Ladder index that resolved at record time.")
     resolved_rung: int = Field(ge=0, description="Ladder index that resolved now.")
     resolved_strategy: str = Field(description="Strategy of the rung that resolved now.")
+    identity_changed: bool = Field(
+        default=False,
+        description="The winner's name or text differs from the fingerprint, e.g. Find became "
+        "Search. Replay acts on it for safe steps and refuses irreversible ones.",
+    )
 
 
 class WeakTargetWarning(ResultModel):

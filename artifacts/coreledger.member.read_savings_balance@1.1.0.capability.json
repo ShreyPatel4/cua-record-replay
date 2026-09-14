@@ -1,0 +1,802 @@
+{
+  "schema_version": "1.0",
+  "capability": {
+    "id": "coreledger.member.read_savings_balance",
+    "version": "1.1.0",
+    "status": "draft",
+    "name": "Read member savings balance",
+    "description": "Sign in to CoreLedger, look up a member by number, and return their current share savings balance.",
+    "created_at": "2026-09-14T09:00:00Z",
+    "created_from_run_id": "disc_20260914T055730Z_9596",
+    "policy_ref": "coreledger-readonly"
+  },
+  "surface": {
+    "kind": "web",
+    "entry_url": "http://127.0.0.1:5050/",
+    "app_family": "coreledger",
+    "app_version_hint": "4.2.1"
+  },
+  "secrets": [
+    {
+      "name": "operator_id",
+      "kind": "identity",
+      "env_var": "CORELEDGER_OPERATOR_USER",
+      "description": "Supplied at run time from CORELEDGER_OPERATOR_USER; never stored."
+    },
+    {
+      "name": "operator_password",
+      "kind": "credential",
+      "env_var": "CORELEDGER_OPERATOR_PASSWORD",
+      "description": "Supplied at run time from CORELEDGER_OPERATOR_PASSWORD; never stored."
+    }
+  ],
+  "inputs": [
+    {
+      "name": "member_number",
+      "type": "string",
+      "description": "Typed into 'Member number'. Discovery saw a 5-digit value.",
+      "required": true,
+      "pattern": "^[0-9]{5}$",
+      "sensitive": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "savings_balance",
+      "type": "money",
+      "description": "Value shown by the text right of 'Share Savings' when the flow ends.",
+      "extract": {
+        "target": {
+          "ladder": [
+            {
+              "strategy": "anchor_relative",
+              "anchor_text": "Share Savings",
+              "direction": "right",
+              "same_row": true,
+              "target_kind": "text",
+              "nth": 1,
+              "confidence": 0.8
+            },
+            {
+              "strategy": "bbox",
+              "x": 0.6153,
+              "y": 0.0866,
+              "w": 0.0691,
+              "h": 0.0306,
+              "fragile": true,
+              "confidence": 0.4
+            }
+          ],
+          "recorded_rung": 0,
+          "frame_path": [
+            "main"
+          ],
+          "fingerprint": {
+            "role": "cell",
+            "kind": "text"
+          },
+          "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Share Savings' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
+        },
+        "parse": "money_usd"
+      },
+      "sensitive": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "s01",
+      "action": "navigate",
+      "description": "Open the application entry page.",
+      "url": "{{surface.entry_url}}",
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_operator_sign_in",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s02",
+      "action": "type_text",
+      "description": "Enter {{secrets.operator_id}} into 'Operator ID'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Operator ID",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Operator ID",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Operator sign-in",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.4908,
+            "y": 0.1012,
+            "w": 0.0977,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Operator ID",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+      },
+      "value": "{{secrets.operator_id}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s03",
+      "action": "type_text",
+      "description": "Enter {{secrets.operator_password}} into 'Password'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Password",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Password",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Operator ID",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.4747,
+            "y": 0.1358,
+            "w": 0.0977,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Password",
+          "input_type": "password",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Password', the handle least tied to layout. label_text: reached through its visible label 'Password' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator ID', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+      },
+      "value": "{{secrets.operator_password}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s04",
+      "action": "click",
+      "description": "Click 'Sign in'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "button",
+            "name": "Sign in",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Password",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.5441,
+            "y": 0.1691,
+            "w": 0.0443,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "button",
+          "name": "Sign in",
+          "input_type": "submit",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it button 'Sign in', the handle least tied to layout. anchor_relative: the clickable below the fixed text 'Password', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_member_lookup",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s05",
+      "action": "type_text",
+      "description": "Enter {{inputs.member_number}} into the textbox labelled 'Member number'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Member number",
+            "relation": "same_row",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1355,
+            "y": 0.0493,
+            "w": 0.0758,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "value": "{{inputs.member_number}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s06",
+      "action": "click",
+      "description": "Click 'Find'. The 3 s checkpoint wait is deliberate: a slow profile is handled by od_slow_member_load's bounded wait_retry, not by a long blind wait.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "text_exact",
+            "text": "Find",
+            "confidence": 0.85
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.2144,
+            "y": 0.0466,
+            "w": 0.0451,
+            "h": 0.0333,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "cell",
+          "name": "Find",
+          "text": "Find",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. text_exact: its own text 'Find' is interface wording, not data. anchor_relative: the clickable right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_member_profile",
+        "timeout_ms": 3000
+      },
+      "on_fail": "hard_failure"
+    }
+  ],
+  "checkpoints": {
+    "cp_operator_sign_in": {
+      "description": "After s01: 'Operator sign-in' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Operator sign-in",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "role_name",
+                  "role": "textbox",
+                  "name": "Operator ID",
+                  "confidence": 0.95
+                },
+                {
+                  "strategy": "label_text",
+                  "label": "Operator ID",
+                  "relation": "wrapped",
+                  "control": "textbox",
+                  "confidence": 0.9
+                },
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Operator sign-in",
+                  "direction": "below",
+                  "same_row": false,
+                  "target_kind": "input",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.4908,
+                  "y": 0.1012,
+                  "w": 0.0977,
+                  "h": 0.028,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "textbox",
+                "name": "Operator ID",
+                "input_type": "text",
+                "kind": "input"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+            }
+          }
+        ]
+      }
+    },
+    "cp_member_lookup": {
+      "description": "After s04: 'Member Lookup' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member Lookup",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "label_text",
+                  "label": "Member number",
+                  "relation": "same_row",
+                  "control": "textbox",
+                  "confidence": 0.9
+                },
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Member number",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "input",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.1355,
+                  "y": 0.0493,
+                  "w": 0.0758,
+                  "h": 0.028,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "textbox",
+                "input_type": "text",
+                "kind": "input"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+            }
+          }
+        ]
+      }
+    },
+    "cp_member_profile": {
+      "description": "The goal is reached: 'Member profile' is showing and the values to read are on screen.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member profile",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.member_number}}",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Share Savings",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "text",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.6153,
+                  "y": 0.0866,
+                  "w": 0.0691,
+                  "h": 0.0306,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "cell",
+                "kind": "text"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Share Savings' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
+            }
+          }
+        ]
+      }
+    }
+  },
+  "outcome_detectors": [
+    {
+      "id": "od_session_expired",
+      "description": "CoreLedger ended the session and bounced the main frame to sign-in. Only the member page checks the session mid-flow, so the detector is scoped to s06. Signing in again redirects back to the member page, which is why run_steps re-verifies s06's checkpoint instead of s04's.",
+      "when": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "url_matches",
+            "pattern": "/login",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "Your session has expired",
+            "frame_path": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "recoverable",
+        "code": "SESSION_EXPIRED",
+        "recovery": {
+          "kind": "run_steps",
+          "step_ids": [
+            "s02",
+            "s03",
+            "s04"
+          ],
+          "max_attempts": 1
+        },
+        "on_exhausted": "hard_failure"
+      }
+    },
+    {
+      "id": "od_app_error",
+      "description": "The server returned its 500 page. A human can often clear the cause and send the run on.",
+      "when": {
+        "kind": "any",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Internal Server Error",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "status_code",
+            "code": 500,
+            "frame_path": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "outcome": {
+        "type": "hard_failure",
+        "code": "APP_ERROR",
+        "escalate": true
+      }
+    },
+    {
+      "id": "od_access_denied",
+      "description": "The operator role is not allowed to open this record.",
+      "when": {
+        "kind": "text_present",
+        "text": "Access denied",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "outcome": {
+        "type": "hard_failure",
+        "code": "PERMISSION_DENIED",
+        "escalate": true
+      }
+    },
+    {
+      "id": "od_member_not_found",
+      "description": "No member has that number. A legitimate answer, not a failure.",
+      "when": {
+        "kind": "text_present",
+        "text": "No member found",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "business_outcome",
+        "code": "MEMBER_NOT_FOUND",
+        "message_from": {
+          "kind": "text_pattern",
+          "pattern": "No member found for member number [0-9*]+\\.",
+          "frame_path": [
+            "main"
+          ]
+        },
+        "field": "member_number"
+      }
+    },
+    {
+      "id": "od_member_number_rejected",
+      "description": "CoreLedger rejected the member number format. The input pattern normally catches this before step 1.",
+      "when": {
+        "kind": "text_present",
+        "text": "Member number must be 5 digits",
+        "frame_path": [
+          "main"
+        ]
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "business_outcome",
+        "code": "VALIDATION_ERROR",
+        "message_from": {
+          "kind": "text_pattern",
+          "pattern": "Member number must be 5 digits\\.",
+          "frame_path": [
+            "main"
+          ]
+        },
+        "field": "member_number"
+      }
+    },
+    {
+      "id": "od_system_notice",
+      "description": "A maintenance notice covers the profile until acknowledged. If OK never clears it, a human can.",
+      "when": {
+        "kind": "element_present",
+        "target": {
+          "ladder": [
+            {
+              "strategy": "text_exact",
+              "text": "OK",
+              "confidence": 0.6
+            },
+            {
+              "strategy": "anchor_relative",
+              "anchor_text": "System notice",
+              "direction": "below",
+              "same_row": false,
+              "target_kind": "clickable",
+              "nth": 1,
+              "confidence": 0.85
+            }
+          ],
+          "recorded_rung": 0,
+          "frame_path": [
+            "main"
+          ],
+          "fingerprint": {
+            "role": "cell",
+            "name": "OK",
+            "text": "OK",
+            "kind": "clickable"
+          },
+          "notes": "Added in review, not recorded: discovery never saw the notice. 'OK' alone is a common word, so confidence is low; it is only evaluated after s06, where the notice is the only OK on screen. The anchor rung keys on the notice's own heading."
+        }
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "recoverable",
+        "code": "INTERSTITIAL",
+        "recovery": {
+          "kind": "click",
+          "target": {
+            "ladder": [
+              {
+                "strategy": "text_exact",
+                "text": "OK",
+                "confidence": 0.6
+              },
+              {
+                "strategy": "anchor_relative",
+                "anchor_text": "System notice",
+                "direction": "below",
+                "same_row": false,
+                "target_kind": "clickable",
+                "nth": 1,
+                "confidence": 0.85
+              }
+            ],
+            "recorded_rung": 0,
+            "frame_path": [
+              "main"
+            ],
+            "fingerprint": {
+              "role": "cell",
+              "name": "OK",
+              "text": "OK",
+              "kind": "clickable"
+            },
+            "notes": "Same control as the trigger."
+          },
+          "max_attempts": 2
+        },
+        "on_exhausted": "escalate"
+      }
+    },
+    {
+      "id": "od_slow_member_load",
+      "description": "The profile is slower than the step's wait. Keep checking within a bounded budget.",
+      "when": {
+        "kind": "checkpoint_timeout",
+        "checkpoint": "cp_member_profile"
+      },
+      "scope": [
+        "s06"
+      ],
+      "outcome": {
+        "type": "recoverable",
+        "code": "SLOW_LOAD",
+        "recovery": {
+          "kind": "wait_retry",
+          "max_total_ms": 15000,
+          "poll_ms": 500
+        },
+        "on_exhausted": "hard_failure"
+      }
+    }
+  ],
+  "success": {
+    "checkpoint": "cp_member_profile",
+    "requires_outputs": [
+      "savings_balance"
+    ]
+  },
+  "tenant_overrides": {},
+  "provenance": {
+    "recorded_by": "discover",
+    "model": "claude-sonnet-4-6",
+    "evidence_run": "evidence/disc_20260914T055730Z_9596",
+    "review_notes": "Recorded by discovery on the happy path (1.0.0), then reviewed by hand. The review added the seven outcome detectors, ported from the signed-off example and renamed to this recording's input and checkpoints (member_number, cp_member_profile), and cut s06's wait from 10 s to 3 s so a slow profile trips checkpoint_timeout and od_slow_member_load's wait_retry instead of being absorbed by a long wait. Steps, targets, and checkpoints are the recording's own. Minor bump: new outcome codes and a flow change, no contract break."
+  }
+}

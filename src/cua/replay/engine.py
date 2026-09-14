@@ -1,0 +1,965 @@
+"""Replay engine: runs a capability's steps with no model in the loop and returns a ReplayResult.
+
+It sees only the surface, locator, and gate contracts, so the flow never knows it runs in a browser.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal, Protocol, TypeVar
+
+from cua.artifact.inputs import TypedInput, render
+from cua.artifact.schema import (
+    POLL_MS,
+    BusinessOutcome,
+    Capability,
+    CheckpointTimeout,
+    CheckpointWait,
+    ClickRecovery,
+    ClickStep,
+    Condition,
+    HardFailure,
+    MessageSource,
+    NavigateStep,
+    OutcomeDetector,
+    OutputSpec,
+    PressKeyStep,
+    Recoverable,
+    RunStepsRecovery,
+    SettleWait,
+    Step,
+    Target,
+    TargetTextMessage,
+    TypeTextStep,
+    UrlMatches,
+    WaitRetryRecovery,
+    iter_conditions,
+)
+from cua.evidence.writer import EvidenceWriter
+from cua.locate.resolver import Resolved, Unresolved, resolve
+from cua.policy.enforce import GatedSurface
+from cua.policy.models import RequiresConfirmation
+from cua.policy.redact import Redactor
+from cua.replay.conditions import ConditionSurface, describe, failing, holds, render_pattern
+from cua.replay.extract import ExtractionError, parse_value
+from cua.replay.result import (
+    AutomaticRecovery,
+    DriftWarning,
+    FieldError,
+    OutputValue,
+    RecoveryRecord,
+    ReplayResult,
+    ReplayWarning,
+    StepRecord,
+    WeakTargetWarning,
+)
+from cua.session.intervention import ReasonCode
+from cua.surface.base import (
+    BLOCKING_EVENTS,
+    Action,
+    ActResult,
+    Click,
+    ExpectedDialog,
+    Navigate,
+    PressKey,
+    ReadText,
+    SelectOption,
+    SurfaceError,
+    TypeText,
+)
+from cua.vocab import RiskClass
+
+T = TypeVar("T")
+StopStatus = Literal["business_outcome", "hard_failure", "escalated"]
+# Outputs sit on the screen the success checkpoint just verified, so they get a short grace only.
+OUTPUT_TIMEOUT_MS = 2000
+RECOVERY_SETTLE_MS = 300
+
+
+class Clock(Protocol):
+    def now(self) -> float:
+        """Seconds on a monotonic clock."""
+        ...
+
+    def sleep(self, ms: int) -> None:
+        """Let ms pass while the surface keeps handling its events."""
+        ...
+
+
+class SurfaceClock:
+    """Real time, waiting through the surface so routes and dialogs keep being answered."""
+
+    def __init__(self, surface: ConditionSurface) -> None:
+        self._surface = surface
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, ms: int) -> None:
+        self._surface.wait(ms)
+
+
+class RunStopped(Exception):
+    """Ends the run from anywhere inside a step; the engine turns it into the ReplayResult."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        expected: str,
+        observed: str,
+        status: StopStatus = "hard_failure",
+        field_errors: tuple[FieldError, ...] = (),
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message
+        self.expected = expected
+        self.observed = observed
+        self.status = status
+        self.field_errors = field_errors
+
+
+Escalation = Callable[[RunStopped, ReasonCode], RunStopped]
+
+
+def no_operator(stop: RunStopped, reason: ReasonCode) -> RunStopped:
+    """What an escalation becomes when no operator channel is attached to the run: a hard failure
+    that keeps the escalating code. The session controller replaces this with a pause for a human.
+    """
+    return RunStopped(
+        stop.code,
+        f"{stop.message} This needs a human ({reason}), but no operator channel is attached, so "
+        "the run stops here.",
+        expected=stop.expected,
+        observed=stop.observed,
+    )
+
+
+@dataclass
+class _OpenRecovery:
+    detector: OutcomeDetector
+    outcome: Recoverable
+    started: float
+    attempts: int = 0
+    window_ends: float | None = None
+
+
+class ReplayEngine:
+    """One run of one tenant-resolved capability over a gated surface.
+
+    Every wait is a poll loop. Each tick drains surface events (a refused request or an unexpected
+    dialog stops the run), evaluates the step's in-scope detectors in artifact order, then the
+    wait's own condition. checkpoint_timeout detectors are evaluated once per deadline. A click or
+    run_steps recovery restarts the interrupted wait with its full timeout; a wait_retry recovery
+    keeps polling the same wait for its budget, with its own trigger set aside.
+    """
+
+    def __init__(
+        self,
+        capability: Capability,
+        surface: ConditionSurface,
+        gated: GatedSurface,
+        *,
+        inputs: Mapping[str, TypedInput],
+        masked_inputs: Mapping[str, str],
+        secrets: Mapping[str, str],
+        redactor: Redactor,
+        evidence: EvidenceWriter,
+        run_id: str,
+        started_at: datetime,
+        tenant: str | None = None,
+        clock: Clock | None = None,
+        escalation: Escalation = no_operator,
+    ) -> None:
+        self._cap = capability
+        self._surface = surface
+        self._gated = gated
+        self._inputs = dict(inputs)
+        self._masked_inputs = dict(masked_inputs)
+        self._secrets = dict(secrets)
+        self._redactor = redactor
+        self._evidence = evidence
+        self._run_id = run_id
+        self._started_at = started_at
+        self._tenant = tenant
+        self._clock = clock or SurfaceClock(surface)
+        self._escalation = escalation
+        entry = getattr(capability.surface, "entry_url", "")
+        self._surface_values = {"entry_url": entry} if entry else {}
+        self._steps_by_id = {s.id: s for s in capability.steps}
+        self._index = 1
+        self._reached: str | None = None
+        self._records: list[StepRecord] = []
+        self._recoveries: list[RecoveryRecord] = []
+        self._warnings: list[ReplayWarning] = []
+        self._warned: set[tuple[str, str, int]] = set()
+        self._shows_sensitive = False
+        self._sensitive_outputs = any(o.sensitive for o in capability.outputs)
+        success_checkpoint = capability.success.checkpoint
+        self._success_step = next(
+            (
+                s.id
+                for s in capability.steps
+                if isinstance(s.wait_for, CheckpointWait)
+                and s.wait_for.checkpoint == success_checkpoint
+            ),
+            capability.steps[-1].id,
+        )
+
+    # ---- the run --------------------------------------------------------------------------------
+
+    def run(self) -> ReplayResult:
+        begin = self._clock.now()
+        meta = self._cap.capability
+        self._log(
+            "run_started",
+            capability=meta.id,
+            version=meta.version,
+            status=meta.status,
+            tenant=self._tenant,
+            inputs=self._masked_inputs,
+            steps=[s.id for s in self._cap.steps],
+        )
+        try:
+            for index, step in enumerate(self._cap.steps, start=1):
+                self._run_step(step, index=index)
+            outputs = self._finish()
+        except RunStopped as stop:
+            self._capture(failed=True)
+            result = self._result(begin, stop=stop)
+        else:
+            result = self._result(begin, outputs=outputs)
+        self._log(
+            "run_finished",
+            status=result.status,
+            outcome_code=result.outcome_code,
+            step_reached=result.step_reached,
+            duration_ms=result.duration_ms,
+            recoveries=len(result.recoveries),
+            warnings=len(result.warnings),
+        )
+        return result
+
+    def _result(
+        self,
+        begin: float,
+        *,
+        stop: RunStopped | None = None,
+        outputs: dict[str, OutputValue] | None = None,
+    ) -> ReplayResult:
+        common: dict[str, Any] = {
+            "capability_id": self._cap.capability.id,
+            "capability_version": self._cap.capability.version,
+            "tenant": self._tenant,
+            "run_id": self._run_id,
+            "started_at": self._started_at,
+            "duration_ms": max(0, int((self._clock.now() - begin) * 1000)),
+            "inputs": self._masked_inputs,
+            "step_reached": self._reached,
+            "steps": self._records,
+            "recoveries": self._recoveries,
+            "warnings": self._warnings,
+            "evidence_dir": str(self._evidence.dir),
+        }
+        if stop is None:
+            status = "recovered_then_success" if self._recoveries else "success"
+            return ReplayResult(status=status, outputs=outputs or {}, **common)
+        return ReplayResult(
+            status=stop.status,
+            outcome_code=stop.code,
+            message=self._redactor.text(stop.message),
+            field_errors=list(stop.field_errors),
+            expected=self._redactor.text(stop.expected) or None,
+            observed=self._redactor.text(stop.observed) or None,
+            **common,
+        )
+
+    # ---- steps ----------------------------------------------------------------------------------
+
+    def _run_step(self, step: Step, *, index: int | None = None, skip_wait: bool = False) -> None:
+        """A step from the flow (index given) or one re-run by a recovery (index None)."""
+        rerun = index is None
+        if index is not None:
+            self._index, self._reached = index, step.id
+        if step.id == self._success_step and self._sensitive_outputs:
+            self._shows_sensitive = True
+        begin = self._clock.now()
+        self._log(
+            "step_started",
+            step_id=step.id,
+            action=step.action,
+            description=step.description,
+            rerun=rerun,
+        )
+        target = getattr(step, "target", None)
+        timeout_ms = step.wait_for.timeout_ms
+        resolved: Resolved | None = None
+        attempts = 0
+        while True:
+            attempts += 1
+            if target is not None:
+                resolved = self._resolve(step, target, "step", timeout_ms)
+            act = self._perform(step.id, self._action(step, resolved), step.risk)
+            if act.ok:
+                break
+            retryable = step.risk != "irreversible" and not (
+                isinstance(step, ClickStep) and step.dialog is not None
+            )
+            if not retryable or self._clock.now() - begin >= timeout_ms / 1000:
+                raise self._step_failure(
+                    step,
+                    "ACTION_FAILED",
+                    f"{step.action} on step {step.id} failed: {act.message}",
+                    expected=step.description,
+                    observed=act.message or "the surface refused the action",
+                )
+            self._clock.sleep(POLL_MS)
+        if not skip_wait:
+            self._wait(step)
+        if rerun:
+            return
+        self._records.append(
+            StepRecord(
+                step_id=step.id,
+                action=step.action,
+                resolved_rung=resolved.rung_index if resolved else None,
+                resolved_strategy=resolved.strategy if resolved else None,
+                passed=True,
+                attempts=attempts,
+                duration_ms=max(0, int((self._clock.now() - begin) * 1000)),
+            )
+        )
+        self._capture(failed=False)
+
+    def _render(self, value: str) -> str:
+        return render(
+            value, inputs=self._inputs, secrets=self._secrets, surface=self._surface_values
+        )
+
+    def _action(self, step: Step, resolved: Resolved | None) -> Action:
+        if isinstance(step, NavigateStep):
+            return Navigate(self._render(step.url))
+        if isinstance(step, PressKeyStep):
+            return PressKey(step.key, resolved.element if resolved else None)
+        assert resolved is not None
+        if isinstance(step, ClickStep):
+            dialog = step.dialog
+            expected = (
+                ExpectedDialog(
+                    dialog.dialog_type,
+                    render_pattern(dialog.message_pattern, self._inputs),
+                    dialog.response,
+                )
+                if dialog
+                else None
+            )
+            return Click(resolved.element, dialog=expected)
+        if isinstance(step, TypeTextStep):
+            return TypeText(resolved.element, self._render(step.value), step.clear_first)
+        return SelectOption(resolved.element, self._render(step.option_label))
+
+    def _perform(self, step_id: str, action: Action, risk: RiskClass) -> ActResult:
+        result = self._gated.perform(action, declared_risk=risk)
+        decision = self._gated.last_decision
+        if decision is not None:
+            self._evidence.event(
+                "policy",
+                "decision",
+                step_id=step_id,
+                action=action.kind,
+                decision=decision.model_dump(mode="json"),
+            )
+        self._log(
+            "act",
+            step_id=step_id,
+            action=action.kind,
+            ok=result.ok,
+            code=result.code,
+            message=result.message,
+            events=[{"kind": e.kind, "detail": e.detail} for e in result.events],
+            duration_ms=result.duration_ms,
+        )
+        if result.ok:
+            return result
+        expected = f"{action.kind} allowed by policy {self._cap.capability.policy_ref}"
+        if result.code == "POLICY_BLOCKED":
+            raise RunStopped(
+                "POLICY_BLOCKED", result.message, expected=expected, observed=result.message
+            )
+        if result.code == "CONFIRMATION_REQUIRED":
+            stop = RunStopped(
+                "CONFIRMATION_REQUIRED",
+                f"{result.message}. Replay does not confirm irreversible actions on its own.",
+                expected=expected,
+                observed=result.message,
+            )
+            if isinstance(decision, RequiresConfirmation) and decision.handling == "escalate":
+                raise self._escalate(stop, "IRREVERSIBLE_NEEDS_HUMAN")
+            stop.message += " Pass --confirm-irreversible to allow it."
+            raise stop
+        if any(e.kind == "unexpected_dialog" for e in result.events):
+            raise RunStopped(
+                "UNEXPECTED_DIALOG",
+                result.message,
+                expected=f"no dialog, or the one step {step_id} declares",
+                observed=result.message,
+            )
+        return result
+
+    def _step_failure(
+        self, step: Step, code: str, message: str, *, expected: str, observed: str
+    ) -> RunStopped:
+        stop = RunStopped(code, message, expected=expected, observed=observed)
+        return self._escalate(stop, "HARD_FAILURE_ESCALATE") if step.on_fail == "escalate" else stop
+
+    def _escalate(self, stop: RunStopped, reason: ReasonCode) -> RunStopped:
+        self._log("escalation_requested", code=stop.code, reason=reason)
+        return self._escalation(stop, reason)
+
+    # ---- targets --------------------------------------------------------------------------------
+
+    def _resolve(
+        self,
+        step: Step,
+        target: Target,
+        target_ref: str,
+        timeout_ms: int,
+        *,
+        failure_code: str | None = None,
+    ) -> Resolved:
+        last: list[Unresolved] = []
+
+        def attempt() -> Resolved | None:
+            try:
+                found = resolve(target, self._surface)
+            except SurfaceError:
+                return None
+            if isinstance(found, Resolved):
+                return found
+            last[:] = [found]
+            return None
+
+        def timed_out() -> RunStopped:
+            code = failure_code or (last[0].code if last else "TARGET_NOT_FOUND")
+            detail = last[0].detail if last else "the frame was not available"
+            return self._step_failure(
+                step,
+                code,
+                f"the {target_ref} target of step {step.id} did not resolve to exactly one "
+                f"element within {timeout_ms} ms",
+                expected=f"exactly one {target.fingerprint.kind or 'element'} in "
+                f"{'/'.join(target.frame_path) or 'top'}: {target.notes}",
+                observed=f"{detail}; {self._where(target.frame_path)}",
+            )
+
+        found = self._poll(step, attempt, timeout_ms=timeout_ms, on_timeout=timed_out)
+        self._note(step.id, target_ref, target, found)
+        self._log(
+            "target_resolved",
+            step_id=step.id,
+            target=target_ref,
+            rung=found.rung_index,
+            strategy=found.strategy,
+            recorded_rung=target.recorded_rung,
+            drift=found.drift,
+            identity_changed=found.identity_changed,
+            matches=[{"strategy": a.strategy, "matches": a.matches} for a in found.attempts],
+        )
+        if found.identity_changed and step.risk == "irreversible":
+            raise self._step_failure(
+                step,
+                "TARGET_CHANGED",
+                f"step {step.id} is irreversible and its target no longer looks like the "
+                "recorded element, so replay will not act on it",
+                expected=f"the recorded element {target.fingerprint.name or ''}".strip(),
+                observed=f"a renamed element found by {found.strategy}",
+            )
+        return found
+
+    def _note(self, step_id: str, target_ref: str, target: Target, found: Resolved) -> None:
+        key = (step_id, target_ref, found.rung_index)
+        if key in self._warned:
+            return
+        if found.drift or found.identity_changed:
+            self._warned.add(key)
+            self._warnings.append(
+                DriftWarning(
+                    type="drift",
+                    step_id=step_id,
+                    target_ref=target_ref,
+                    recorded_rung=target.recorded_rung,
+                    resolved_rung=found.rung_index,
+                    resolved_strategy=found.strategy,
+                    identity_changed=found.identity_changed,
+                )
+            )
+            self._log(
+                "drift_signal",
+                step_id=step_id,
+                target=target_ref,
+                recorded_rung=target.recorded_rung,
+                resolved_rung=found.rung_index,
+                strategy=found.strategy,
+                identity_changed=found.identity_changed,
+            )
+        if found.fragile:
+            self._warned.add(key)
+            self._warnings.append(
+                WeakTargetWarning(
+                    type="weak_target",
+                    step_id=step_id,
+                    target_ref=target_ref,
+                    message="resolved only by coordinates, which break on any layout change",
+                )
+            )
+
+    # ---- waits ----------------------------------------------------------------------------------
+
+    def _wait(self, step: Step) -> None:
+        wait = step.wait_for
+        begin = self._clock.now()
+        if isinstance(wait, CheckpointWait):
+            self._wait_checkpoint(step, wait.checkpoint, wait.timeout_ms)
+        elif isinstance(wait, SettleWait):
+
+            def settled() -> bool | None:
+                return (
+                    True if self._surface.settle(wait.quiet_ms, wait.quiet_ms + POLL_MS) else None
+                )
+
+            self._poll(
+                step,
+                settled,
+                timeout_ms=wait.timeout_ms,
+                pace=False,
+                on_timeout=lambda: self._step_failure(
+                    step,
+                    "CHECKPOINT_TIMEOUT",
+                    f"the page did not settle within {wait.timeout_ms} ms after step {step.id}",
+                    expected=f"no requests in flight and a DOM quiet for {wait.quiet_ms} ms",
+                    observed=f"still busy; {self._where([])}",
+                ),
+            )
+        else:
+            condition = UrlMatches(
+                kind="url_matches", pattern=wait.pattern, frame_path=wait.frame_path
+            )
+            self._poll(
+                step,
+                lambda: True if holds(condition, self._surface, self._inputs) else None,
+                timeout_ms=wait.timeout_ms,
+                on_timeout=lambda: self._step_failure(
+                    step,
+                    "CHECKPOINT_TIMEOUT",
+                    f"the URL did not change as step {step.id} expects within {wait.timeout_ms} ms",
+                    expected=describe(condition),
+                    observed=self._where(wait.frame_path),
+                ),
+            )
+        self._log(
+            "wait_passed",
+            step_id=step.id,
+            wait=wait.kind,
+            checkpoint=getattr(wait, "checkpoint", None),
+            duration_ms=max(0, int((self._clock.now() - begin) * 1000)),
+        )
+
+    def _wait_checkpoint(self, step: Step, checkpoint_id: str, timeout_ms: int) -> None:
+        checkpoint = self._cap.checkpoints[checkpoint_id]
+
+        def passes() -> bool | None:
+            seen: list[tuple[Target, Resolved]] = []
+            ok = holds(
+                checkpoint.condition,
+                self._surface,
+                self._inputs,
+                on_resolved=lambda target, found: seen.append((target, found)),
+            )
+            if not ok:
+                return None
+            for target, found in seen:
+                self._note(step.id, f"checkpoint:{checkpoint_id}", target, found)
+            return True
+
+        self._poll(
+            step,
+            passes,
+            timeout_ms=timeout_ms,
+            checkpoint=checkpoint_id,
+            on_timeout=lambda: self._step_failure(
+                step,
+                "CHECKPOINT_TIMEOUT",
+                f"checkpoint {checkpoint_id} did not hold within {timeout_ms} ms after step "
+                f"{step.id}",
+                expected=f"{checkpoint_id}: {checkpoint.description}",
+                observed=self._observed(checkpoint.condition),
+            ),
+        )
+
+    def _poll(
+        self,
+        step: Step,
+        check: Callable[[], T | None],
+        *,
+        timeout_ms: int,
+        on_timeout: Callable[[], RunStopped],
+        checkpoint: str | None = None,
+        pace: bool = True,
+    ) -> T:
+        opened: dict[str, _OpenRecovery] = {}
+        deadline = self._clock.now() + timeout_ms / 1000
+        retrying: _OpenRecovery | None = None
+        try:
+            while True:
+                self._raise_on_events(step)
+                skip = {retrying.detector.id} if retrying else set()
+                detector = self._matching(step, skip=skip)
+                if detector is not None:
+                    retrying = self._handle(step, detector, opened) or retrying
+                    if retrying is None or retrying.detector is not detector:
+                        deadline = self._clock.now() + timeout_ms / 1000
+                    continue
+                value = check()
+                if value is not None:
+                    self._close(step, opened, succeeded=True)
+                    return value
+                now = self._clock.now()
+                if retrying is not None and retrying.window_ends is not None:
+                    if now >= retrying.window_ends:
+                        raise self._exhausted(step, retrying)
+                    pause = min(_poll_ms(retrying.outcome), retrying.window_ends - now)
+                elif now >= deadline:
+                    fired = (
+                        self._matching(step, timed_out=frozenset({checkpoint}), timeouts=True)
+                        if checkpoint is not None
+                        else None
+                    )
+                    if fired is None:
+                        raise on_timeout()
+                    retrying = self._handle(step, fired, opened) or retrying
+                    deadline = self._clock.now() + timeout_ms / 1000
+                    continue
+                else:
+                    pause = min(POLL_MS / 1000, deadline - now)
+                if pace:
+                    self._clock.sleep(max(1, int(pause * 1000)))
+        except RunStopped:
+            self._close(step, opened, succeeded=False)
+            raise
+
+    def _raise_on_events(self, step: Step) -> None:
+        events = self._surface.drain_events()
+        if not events:
+            return
+        self._log(
+            "surface_events",
+            step_id=step.id,
+            events=[{"kind": e.kind, "detail": e.detail, "url": e.url} for e in events],
+        )
+        blocked = [e for e in events if e.kind in BLOCKING_EVENTS]
+        if blocked:
+            raise RunStopped(
+                "POLICY_BLOCKED",
+                f"{blocked[0].kind}: {blocked[0].detail}",
+                expected=f"every request inside policy {self._cap.capability.policy_ref}",
+                observed=f"{blocked[0].kind} {blocked[0].url}".strip(),
+            )
+        dialogs = [e for e in events if e.kind == "unexpected_dialog"]
+        if dialogs:
+            raise RunStopped(
+                "UNEXPECTED_DIALOG",
+                f"an unexpected dialog was dismissed: {dialogs[0].detail}",
+                expected=f"no dialog during step {step.id}",
+                observed=dialogs[0].detail,
+            )
+
+    # ---- detectors and recoveries ---------------------------------------------------------------
+
+    def _matching(
+        self,
+        step: Step,
+        *,
+        timed_out: frozenset[str] = frozenset(),
+        timeouts: bool = False,
+        skip: set[str] | None = None,
+    ) -> OutcomeDetector | None:
+        """First in-scope detector that holds. Timeout triggers only when timeouts is set."""
+        for detector in self._cap.outcome_detectors:
+            if detector.scope is not None and step.id not in detector.scope:
+                continue
+            if skip and detector.id in skip:
+                continue
+            on_timeout = any(
+                isinstance(c, CheckpointTimeout) for c in iter_conditions(detector.when)
+            )
+            if on_timeout != timeouts:
+                continue
+            if holds(detector.when, self._surface, self._inputs, timed_out=timed_out):
+                self._log(
+                    "detector_matched",
+                    step_id=step.id,
+                    detector=detector.id,
+                    outcome=detector.outcome.type,
+                    code=detector.outcome.code,
+                )
+                return detector
+        return None
+
+    def _handle(
+        self, step: Step, detector: OutcomeDetector, opened: dict[str, _OpenRecovery]
+    ) -> _OpenRecovery | None:
+        """Act on a matched detector. Returns the recovery when it opened a wait_retry window."""
+        outcome = detector.outcome
+        if isinstance(outcome, BusinessOutcome):
+            message = self._message(outcome.message_from) or detector.description
+            errors = (
+                (FieldError(field=outcome.field, message=self._redactor.text(message)),)
+                if outcome.field
+                else ()
+            )
+            raise RunStopped(
+                outcome.code,
+                message,
+                expected="",
+                observed=message,
+                status="business_outcome",
+                field_errors=errors,
+            )
+        if isinstance(outcome, HardFailure):
+            stop = RunStopped(
+                outcome.code,
+                detector.description,
+                expected=f"none of the conditions {detector.id} recognizes",
+                observed=f"{describe(detector.when)}; {self._where(_frame_of(detector.when))}",
+            )
+            raise self._escalate(stop, "HARD_FAILURE_ESCALATE") if outcome.escalate else stop
+        assert isinstance(outcome, Recoverable)
+        recovery = outcome.recovery
+        state = opened.setdefault(
+            detector.id, _OpenRecovery(detector, outcome, started=self._clock.now())
+        )
+        if isinstance(recovery, WaitRetryRecovery):
+            if state.window_ends is not None:
+                raise self._exhausted(step, state)
+            state.attempts = 1
+            state.window_ends = self._clock.now() + recovery.max_total_ms / 1000
+            self._log(
+                "recovery_started",
+                step_id=step.id,
+                detector=detector.id,
+                kind=recovery.kind,
+                max_total_ms=recovery.max_total_ms,
+            )
+            return state
+        if state.attempts >= recovery.max_attempts:
+            raise self._exhausted(step, state)
+        state.attempts += 1
+        self._log(
+            "recovery_started",
+            step_id=step.id,
+            detector=detector.id,
+            kind=recovery.kind,
+            attempt=state.attempts,
+            max_attempts=recovery.max_attempts,
+        )
+        if isinstance(recovery, ClickRecovery):
+            self._recovery_click(step, detector, recovery)
+        else:
+            self._recovery_steps(recovery)
+        # Let the app answer the recovery before the wait looks again, so a sign-in that is still
+        # redirecting is not read as the session expiring a second time.
+        self._surface.settle(RECOVERY_SETTLE_MS, step.wait_for.timeout_ms)
+        return None
+
+    def _recovery_click(
+        self, step: Step, detector: OutcomeDetector, recovery: ClickRecovery
+    ) -> None:
+        try:
+            found = resolve(recovery.target, self._surface)
+        except SurfaceError:
+            found = None
+        if not isinstance(found, Resolved):
+            self._log("recovery_target_missing", step_id=step.id, detector=detector.id)
+            return
+        self._note(step.id, f"recovery:{detector.id}", recovery.target, found)
+        self._perform(step.id, Click(found.element), "safe")
+
+    def _recovery_steps(self, recovery: RunStepsRecovery) -> None:
+        """Re-run each step through the gate and its own wait, except the last, whose wait is the
+        interrupted one restarting: the app decides where a re-run lands."""
+        last = recovery.step_ids[-1]
+        for step_id in recovery.step_ids:
+            self._run_step(self._steps_by_id[step_id], skip_wait=step_id == last)
+
+    def _exhausted(self, step: Step, state: _OpenRecovery) -> RunStopped:
+        outcome = state.outcome
+        self._log(
+            "recovery_exhausted",
+            step_id=step.id,
+            detector=state.detector.id,
+            attempts=state.attempts,
+            on_exhausted=outcome.on_exhausted,
+        )
+        stop = RunStopped(
+            outcome.code,
+            f"{state.detector.description} The {outcome.recovery.kind} recovery ran out after "
+            f"{state.attempts} attempt(s).",
+            expected=self._expected_of(step),
+            observed=self._observed_of(step),
+        )
+        if outcome.on_exhausted == "escalate":
+            return self._escalate(stop, "RECOVERY_EXHAUSTED")
+        return stop
+
+    def _close(self, step: Step, opened: dict[str, _OpenRecovery], *, succeeded: bool) -> None:
+        now = self._clock.now()
+        for state in opened.values():
+            record = AutomaticRecovery(
+                type="automatic",
+                step_id=step.id,
+                detector_id=state.detector.id,
+                code=state.outcome.code,
+                recovery_kind=state.outcome.recovery.kind,
+                attempts=max(1, state.attempts),
+                succeeded=succeeded,
+                duration_ms=max(0, int((now - state.started) * 1000)),
+            )
+            self._recoveries.append(record)
+            self._log("recovery_finished", **record.model_dump(mode="json"))
+        opened.clear()
+
+    def _message(self, source: MessageSource | None) -> str | None:
+        if source is None:
+            return None
+        try:
+            if isinstance(source, TargetTextMessage):
+                found = resolve(source.target, self._surface)
+                if not isinstance(found, Resolved):
+                    return None
+                return self._surface.describe(found.element).own_text or None
+            match = re.search(source.pattern, self._surface.frame_text(source.frame_path))
+        except SurfaceError:
+            return None
+        return match.group(0) if match else None
+
+    # ---- success and outputs --------------------------------------------------------------------
+
+    def _finish(self) -> dict[str, OutputValue]:
+        last = self._steps_by_id[self._success_step]
+        checkpoint_id = self._cap.success.checkpoint
+        timeout_ms = last.wait_for.timeout_ms
+        self._shows_sensitive = self._shows_sensitive or self._sensitive_outputs
+        self._wait_checkpoint(last, checkpoint_id, timeout_ms)
+        self._log("success_verified", checkpoint=checkpoint_id)
+        outputs: dict[str, OutputValue] = {}
+        for spec in self._cap.outputs:
+            try:
+                outputs[spec.name] = self._extract(last, spec)
+            except RunStopped:
+                if spec.name in self._cap.success.requires_outputs:
+                    raise
+                self._log("output_skipped", output=spec.name)
+        return outputs
+
+    def _extract(self, step: Step, spec: OutputSpec) -> OutputValue:
+        target = spec.extract.target
+        found = self._resolve(
+            step,
+            target,
+            f"output:{spec.name}",
+            OUTPUT_TIMEOUT_MS,
+            failure_code="OUTPUT_EXTRACTION_FAILED",
+        )
+        read = self._perform(step.id, ReadText(found.element), "safe")
+        expected = f"output {spec.name} readable as {spec.type}"
+        if not read.ok or read.text is None:
+            raise RunStopped(
+                "OUTPUT_EXTRACTION_FAILED",
+                f"could not read output {spec.name}: {read.message}",
+                expected=expected,
+                observed=read.message or "no text",
+            )
+        if spec.sensitive:
+            self._redactor.add_value(read.text)
+        try:
+            value = parse_value(read.text, spec.extract.parse)
+        except ExtractionError as exc:
+            raise RunStopped(
+                "OUTPUT_EXTRACTION_FAILED",
+                f"output {spec.name}: {exc}",
+                expected=expected,
+                observed=f"text that does not parse as {spec.extract.parse}",
+            ) from exc
+        self._log("output_extracted", output=spec.name, type=spec.type, sensitive=spec.sensitive)
+        return value
+
+    # ---- evidence -------------------------------------------------------------------------------
+
+    def _log(self, event: str, **fields: Any) -> None:
+        self._evidence.event("replay", event, **fields)
+
+    def _capture(self, *, failed: bool) -> None:
+        """Screenshot per step, plus the accessibility snapshot on failure. Never fails the run."""
+        name = f"step_{self._index:02d}.png"
+        try:
+            snapshot = self._surface.snapshot()
+            png = self._surface.screenshot()
+        except Exception as exc:
+            self._log("capture_failed", step=self._index, error=type(exc).__name__)
+            return
+        self._evidence.screenshot(name, png, page_urls=snapshot.frame_urls.values())
+        if self._shows_sensitive:
+            self._evidence.flag_sensitive(name)
+        if failed:
+            a11y = self._evidence.snapshot(f"a11y_{self._index:02d}.json", snapshot)
+            if self._shows_sensitive:
+                self._evidence.flag_sensitive(a11y)
+
+    def _where(self, frame_path: list[str]) -> str:
+        try:
+            url = self._surface.frame_url(frame_path)
+        except SurfaceError:
+            return f"frame {'/'.join(frame_path) or 'top'} unavailable"
+        return f"{'/'.join(frame_path) or 'top'} at {url}"
+
+    def _observed(self, condition: Condition) -> str:
+        try:
+            lines = failing(condition, self._surface, self._inputs)
+        except SurfaceError:
+            lines = []
+        where = self._where(_frame_of(condition))
+        return "; ".join([*lines, where]) if lines else f"the condition holds now; {where}"
+
+    def _expected_of(self, step: Step) -> str:
+        wait = step.wait_for
+        if isinstance(wait, CheckpointWait):
+            return f"{wait.checkpoint}: {self._cap.checkpoints[wait.checkpoint].description}"
+        return f"step {step.id} to take effect ({wait.kind})"
+
+    def _observed_of(self, step: Step) -> str:
+        wait = step.wait_for
+        if isinstance(wait, CheckpointWait):
+            return self._observed(self._cap.checkpoints[wait.checkpoint].condition)
+        return self._where([])
+
+
+def _poll_ms(outcome: Recoverable) -> float:
+    recovery = outcome.recovery
+    return (recovery.poll_ms if isinstance(recovery, WaitRetryRecovery) else POLL_MS) / 1000
+
+
+def _frame_of(condition: Condition) -> list[str]:
+    """The first frame a condition looks at, for pointing a human at the right place."""
+    for leaf in iter_conditions(condition):
+        frame_path = getattr(leaf, "frame_path", None)
+        if frame_path is None and hasattr(leaf, "target"):
+            frame_path = leaf.target.frame_path
+        if frame_path is not None:
+            return list(frame_path)
+    return []

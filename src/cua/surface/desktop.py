@@ -6,6 +6,7 @@ It exists so the seam is real: the artifact, resolver, recorder, and replay engi
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import NoReturn
 
 from cua.artifact.schema import Rung
@@ -79,6 +80,15 @@ class DesktopSurface:
         self._unbuilt()
 
     def settle(self, quiet_ms: int, timeout_ms: int) -> bool:
+        self._unbuilt()
+
+    def wait(self, ms: int) -> None:
+        self._unbuilt()
+
+    def start_trace(self) -> None:
+        self._unbuilt()
+
+    def stop_trace(self, path: Path | None) -> bool:
         self._unbuilt()
 
     def candidates(self, rung: Rung, frame_path: Sequence[str]) -> list[Element]:

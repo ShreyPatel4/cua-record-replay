@@ -10,6 +10,7 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from importlib.resources import files
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urljoin, urlsplit
 
@@ -154,6 +155,7 @@ class PlaywrightSurface:
         self._answered_by_guard: set[Request] = set()
         self._status: dict[Frame, int] = {}
         self._synthetic: dict[str, Element] = {}
+        self._tracing = False
         context.add_init_script(MUTATION_JS)
         context.add_init_script(DOWNLOAD_JS)
         context.expose_binding("__cuaDownloadBlocked", self._on_download_blocked)
@@ -574,6 +576,26 @@ class PlaywrightSurface:
             if time.monotonic() >= deadline:
                 return False
             self.page.wait_for_timeout(POLL_MS)
+
+    def wait(self, ms: int) -> None:
+        self.page.wait_for_timeout(ms)
+
+    def start_trace(self) -> None:
+        """Screenshots and DOM snapshots, no sources. Callers start it after sign-in and scrub the
+        archive anyway: traces keep request bodies and input values."""
+        if not self._tracing:
+            self._context.tracing.start(screenshots=True, snapshots=True, sources=False)
+            self._tracing = True
+
+    def stop_trace(self, path: Path | None) -> bool:
+        if not self._tracing:
+            return False
+        self._tracing = False
+        if path is None:
+            self._context.tracing.stop()
+        else:
+            self._context.tracing.stop(path=str(path))
+        return True
 
     def _quiet_ms(self) -> float:
         quiet = float("inf")
