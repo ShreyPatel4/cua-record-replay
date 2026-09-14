@@ -47,6 +47,7 @@ def test_secret_is_removed_from_base64_at_every_byte_offset(prefix: str) -> None
         ("Joined 2012-09-05", "Joined 2012-09-05"),
         ("4210.55 and 1234", "4210.55 and 1234"),
         ("evidence/replay_20260912T150000Z_ab12", "evidence/replay_20260912T150000Z_ab12"),
+        ("http://127.0.0.1:50045/members/10007", "http://127.0.0.1:50045/members/*0007"),
     ],
 )
 def test_account_numbers_keep_only_the_last_four(raw: str, expected: str) -> None:
@@ -89,3 +90,21 @@ def test_from_env_reads_only_set_variables() -> None:
         ["A", "B"], ["C"], environ={"A": "long-enough-secret", "B": "", "C": "teller-0417"}
     )
     assert redactor.text("x long-enough-secret y teller-0417") == f"x {REDACTED} y {REDACTED}"
+
+
+def test_a_value_learned_mid_run_is_masked_as_a_whole_token_only() -> None:
+    redactor = Redactor()
+    redactor.add_secret("15.00")
+    assert redactor.text("balance 15.00.") == f"balance {REDACTED}."
+    assert redactor.text("at 05:18:15.004 paid $115.00") == "at 05:18:15.004 paid $115.00"
+    redactor.add_secret("$4,210.55")
+    assert redactor.text("reads $4,210.55; $14,210.55") == f"reads {REDACTED}; $14,210.55"
+
+
+def test_free_text_masks_amounts_that_app_text_keeps() -> None:
+    redactor = Redactor()
+    prose = "Balance reads $4,210.55 (4,210.55 or 4210.55), build 4.2.1 at 05:18:15.004"
+    assert redactor.text(prose) == prose
+    assert redactor.free_text(prose) == (
+        "Balance reads [AMOUNT] ([AMOUNT] or [AMOUNT]), build 4.2.1 at 05:18:15.004"
+    )

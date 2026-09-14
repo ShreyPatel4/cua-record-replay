@@ -18,6 +18,8 @@ from cua.policy.redact import Redactor
 from cua.surface.base import A11ySnapshot
 
 Actor = Literal["model", "discovery", "replay", "human", "policy", "operator"]
+# Values that are machine identifiers, not page data: redacting them only corrupts them.
+UNREDACTED_KEYS = frozenset({"ts", "digest", "sha256"})
 
 
 def redact_values(value: Any, redactor: Redactor) -> Any:
@@ -25,7 +27,9 @@ def redact_values(value: Any, redactor: Redactor) -> Any:
     if isinstance(value, str):
         return redactor.text(value)
     if isinstance(value, dict):
-        return {k: redact_values(v, redactor) for k, v in value.items()}
+        return {
+            k: v if k in UNREDACTED_KEYS else redact_values(v, redactor) for k, v in value.items()
+        }
     if isinstance(value, list | tuple):
         return [redact_values(v, redactor) for v in value]
     return value

@@ -96,6 +96,11 @@ DOWNLOAD_JS = """(() => {
   };
 })();"""
 POLL_MS = 50
+# An act that can start a navigation stays open until no request has started for this long, capped,
+# so the navigation is routed and judged inside that act. Chromium sends a link's request after
+# click() returns, and a refusal that lands later would look like a successful click.
+REQUEST_GRACE_MS = 150
+REQUEST_GRACE_CAP_MS = 1000
 _SETTLE_TYPES = frozenset({"document", "xhr", "fetch"})
 _PAGE_SCHEMES = frozenset({"http", "https", "about", ""})
 
@@ -145,6 +150,7 @@ class PlaywrightSurface:
         self._events: list[SurfaceEvent] = []
         self._inflight: set[Request] = set()
         self._last_network = time.monotonic()
+        self._last_request_seen = 0.0
         self._answered_by_guard: set[Request] = set()
         self._status: dict[Frame, int] = {}
         self._synthetic: dict[str, Element] = {}
@@ -203,6 +209,7 @@ class PlaywrightSurface:
         return url or "about:blank"
 
     def _on_route(self, route: Route, request: Request) -> None:
+        self._last_request_seen = time.monotonic()
         guard = self._gated()
         if guard is None:
             route.continue_()
@@ -246,6 +253,7 @@ class PlaywrightSurface:
         route.fulfill(status=204, body="")
 
     def _on_request(self, request: Request) -> None:
+        self._last_request_seen = time.monotonic()
         if request.resource_type in _SETTLE_TYPES:
             self._inflight.add(request)
             self._last_network = time.monotonic()
@@ -360,6 +368,15 @@ class PlaywrightSurface:
             return " ".join(handle.inner_text().split())
         return None
 
+    def _await_request_start(self) -> None:
+        started = time.monotonic()
+        while True:
+            now = time.monotonic()
+            quiet_ms = (now - max(started, self._last_request_seen)) * 1000
+            if quiet_ms >= REQUEST_GRACE_MS or (now - started) * 1000 >= REQUEST_GRACE_CAP_MS:
+                return
+            self.page.wait_for_timeout(25)
+
     def act(self, action: Action, *, dialog_guard: DialogGuard | None = None) -> ActResult:
         self._control()
         if self._guard is None:
@@ -380,6 +397,8 @@ class PlaywrightSurface:
                     self.page.wait_for_timeout(POLL_MS)
                 if not self._dialog_seen:
                     failure = f"expected {expected.dialog_type} dialog did not appear"
+            if isinstance(action, Click | PressKey | Navigate):
+                self._await_request_start()
         except (PlaywrightError, SurfaceError) as exc:
             failure = _first_line(exc)
         finally:

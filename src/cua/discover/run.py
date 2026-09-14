@@ -5,8 +5,10 @@ When the loop reaches done: confirm parameters with a human, build the draft, ch
 
 from __future__ import annotations
 
+import re
 import secrets as token
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +17,7 @@ from typing import Literal
 from playwright.sync_api import Browser, sync_playwright
 from pydantic import BaseModel, ConfigDict, Field
 
-from cua.artifact.catalog import Catalog, CatalogError, dump_json
+from cua.artifact.catalog import SUFFIX, Catalog, CatalogError, dump_json
 from cua.discover.loop import DiscoveryConfig, DiscoveryLoop, DiscoveryOutcome, Secret
 from cua.discover.model import ModelClient
 from cua.discover.record import (
@@ -36,6 +38,8 @@ from cua.surface.playwright import PlaywrightSurface
 
 ConfirmParams = Callable[[list[ParamProposal]], list[ParamProposal]]
 EXTRA_SECRET_ENV = ("ANTHROPIC_API_KEY",)
+CAPABILITY_ID_RE = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}")
+DISCOVERED_VERSION = "1.0.0"
 
 
 class DiscoveryError(RuntimeError):
@@ -122,6 +126,18 @@ def run_discovery(
     refusal = gate.url_block_reason(request.entry_url)
     if refusal is not None:
         raise DiscoveryError(f"the entry URL is outside policy {request.policy_id}: {refusal}")
+    # Checked before any model call: a run that cannot be saved should not be paid for.
+    if not CAPABILITY_ID_RE.fullmatch(request.capability_id):
+        raise DiscoveryError(
+            f"capability id {request.capability_id!r} must be dotted, like "
+            "<app_family>.<entity>.<verb_phrase>"
+        )
+    existing = request.artifacts_root / f"{request.capability_id}@{DISCOVERED_VERSION}{SUFFIX}"
+    if existing.exists():
+        raise DiscoveryError(
+            f"{existing} already exists; discovery records {DISCOVERED_VERSION}, so choose another "
+            "--capability-id or remove that draft first"
+        )
     secrets = _secret_values(request.secrets, environ)
     redactor = Redactor(
         [s.value for s in secrets.values() if s.spec.kind == "credential"]
@@ -181,13 +197,18 @@ def run_discovery(
             return DiscoveryResult(
                 **base,
                 status=status,
-                message=redactor.text(outcome.message),
+                message=redactor.free_text(outcome.message),
                 steps_recorded=0,
                 outputs=[],
                 parameters=[],
                 capability=None,
                 artifact_path=None,
             )
+
+        def keep_final_screen() -> None:
+            with suppress(Exception):
+                evidence.snapshot("a11y_final.json", surface.snapshot())
+
         proposals = propose_parameters(record)
         accepted = confirm(proposals)
         accepted_literals = {p.literal for p in accepted}
@@ -224,6 +245,7 @@ def run_discovery(
         try:
             capability = build_capability(record, accepted, meta, redactor)
         except BuildError as exc:
+            keep_final_screen()
             return DiscoveryResult(
                 **common,
                 status="failed",
@@ -231,9 +253,29 @@ def run_discovery(
                 capability=None,
                 artifact_path=None,
             )
+        evidence.event(
+            "discovery",
+            "checkpoints_derived",
+            steps=[
+                {
+                    "step_id": step.id,
+                    "wait": step.wait_for.kind,
+                    "checkpoint": getattr(step.wait_for, "checkpoint", None),
+                }
+                for step in capability.steps
+            ],
+        )
         success = capability.checkpoints[capability.success.checkpoint]
         values = {p.name: p.literal for p in accepted}
-        if not holds(success.condition, surface, values):
+        success_holds = holds(success.condition, surface, values)
+        evidence.event(
+            "discovery",
+            "success_checkpoint",
+            checkpoint=capability.success.checkpoint,
+            holds=success_holds,
+        )
+        if not success_holds:
+            keep_final_screen()
             return DiscoveryResult(
                 **common,
                 status="failed",
@@ -248,6 +290,7 @@ def run_discovery(
         try:
             path = Catalog(request.artifacts_root, request.policy_file).save(capability)
         except CatalogError as exc:
+            keep_final_screen()
             return DiscoveryResult(
                 **common,
                 status="failed",
@@ -275,8 +318,29 @@ def run_discovery(
                     result = with_browser(chromium)
                 finally:
                     chromium.close()
-    except BaseException:
-        evidence.event("discovery", "run_crashed")
+    except BaseException as exc:
+        crashed = DiscoveryResult(
+            run_id=run_id,
+            goal=redactor.text(request.goal),
+            entry_url=request.entry_url,
+            model=model.model,
+            policy=request.policy_id,
+            status="failed",
+            stop_reason="crashed",
+            message=redactor.free_text(f"discovery crashed: {type(exc).__name__}: {exc}"),
+            turns=0,
+            duration_ms=0,
+            input_tokens=0,
+            output_tokens=0,
+            steps_recorded=0,
+            outputs=[],
+            parameters=[],
+            capability=None,
+            artifact_path=None,
+            evidence_dir=str(evidence.dir),
+        )
+        with suppress(Exception):
+            evidence.write_json("result.json", crashed.model_dump(mode="json"))
         evidence.finish()
         raise
     evidence.write_json("result.json", result.model_dump(mode="json"))

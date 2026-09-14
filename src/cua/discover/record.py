@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
+from urllib.parse import parse_qsl, urlsplit
 
 from cua.artifact.schema import (
     AllOf,
@@ -43,9 +44,9 @@ from cua.artifact.schema import (
 )
 from cua.locate.recorder import Recording, looks_like_data, normalize_prose
 from cua.policy.redact import Redactor
-from cua.surface.base import A11ySnapshot
+from cua.surface.base import A11ySnapshot, SnapshotNode
 from cua.surface.snapshot import VALUE_ROLES
-from cua.vocab import SENSITIVE_FIELD_RE, KeyName, RiskClass, template_refs
+from cua.vocab import SENSITIVE_FIELD_RE, TEMPLATE_RE, KeyName, RiskClass, template_refs
 
 StepAction = Literal["navigate", "click", "type_text", "select_option", "press_key"]
 OutputType = Literal["money", "string", "integer", "date"]
@@ -92,6 +93,7 @@ class ObservedStep:
     url: str | None = None
     key: KeyName | None = None
     dialog: DialogExpectation | None = None
+    max_length: int | None = None
 
 
 @dataclass(frozen=True)
@@ -176,42 +178,106 @@ def _word_boundary(literal: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Za-z0-9]){re.escape(literal)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
+def digits_pattern(literal: str, max_length: int | None) -> str | None:
+    """A fixed length only when the field itself enforces it; one observed value proves nothing."""
+    if not literal.isdigit():
+        return None
+    return f"^[0-9]{{{len(literal)}}}$" if max_length == len(literal) else "^[0-9]+$"
+
+
 def propose_parameters(record: DiscoveryRecord) -> list[ParamProposal]:
-    """Literals typed or chosen that the goal itself names. Everything else stays literal."""
+    """Literals the goal names that the run typed, chose, or put in a URL. The rest stay literal.
+
+    In URLs only segments and query values containing a digit count: words in a path are routes.
+    """
     found: dict[str, ParamProposal] = {}
     used: set[str] = set()
-    for index, step in enumerate(record.steps):
-        if step.action not in ("type_text", "select_option") or not step.value:
-            continue
-        literal = step.value.strip()
-        if not literal or template_refs(literal) or not _word_boundary(literal).search(record.goal):
-            continue
+
+    def propose(literal: str, label: str, base: str, pattern: str | None, index: int) -> None:
         if literal in found:
             old = found[literal]
-            found[literal] = ParamProposal(
-                old.literal, old.name, old.pattern, old.label, (*old.step_indexes, index)
-            )
-            continue
-        label = (target_label(step.target.target) if step.target else None) or "value"
-        base = _snake(label) or "value"
+            found[literal] = replace(old, step_indexes=(*old.step_indexes, index))
+            return
         name, n = base, 2
         while name in used:
             name, n = f"{base}_{n}", n + 1
         used.add(name)
-        pattern = f"^[0-9]{{{len(literal)}}}$" if literal.isdigit() else None
         found[literal] = ParamProposal(literal, name, pattern, label, (index,))
+
+    def named(literal: str) -> bool:
+        return bool(literal) and _word_boundary(literal).search(record.goal) is not None
+
+    for index, step in enumerate(record.steps):
+        if step.action in ("type_text", "select_option") and step.value:
+            literal = step.value.strip()
+            if template_refs(literal) or not named(literal):
+                continue
+            label = (target_label(step.target.target) if step.target else None) or "value"
+            pattern = digits_pattern(literal, step.max_length)
+            propose(literal, label, _snake(label) or "value", pattern, index)
+        elif step.action == "navigate" and step.url and step.url != ENTRY_URL:
+            parts = urlsplit(step.url)
+            segments = [s for s in parts.path.split("/") if s]
+            for position, segment in enumerate(segments):
+                if not any(ch.isdigit() for ch in segment) or not named(segment):
+                    continue
+                previous = segments[position - 1] if position else ""
+                noun = _snake(previous.removesuffix("s"))
+                label = f"the URL segment after '{previous}'" if previous else "the URL path"
+                propose(
+                    segment,
+                    label,
+                    f"{noun}_id" if noun else "value",
+                    digits_pattern(segment, None),
+                    index,
+                )
+            for key, value in parse_qsl(parts.query):
+                if any(ch.isdigit() for ch in value) and named(value):
+                    label = f"the URL parameter '{key}'"
+                    propose(
+                        value, label, _snake(key) or "value", digits_pattern(value, None), index
+                    )
     return list(found.values())
+
+
+def dialog_message_pattern(message: str) -> str:
+    """The exact message, anchored, with digit runs generalized so no record number is stored."""
+    parts = re.split(r"([0-9]+)", message)
+    return "^" + "".join("[0-9]+" if p.isdigit() else re.escape(p) for p in parts) + "$"
 
 
 # ---- checkpoints -----------------------------------------------------------------------------
 
 
-def _frame_labels(snapshot: A11ySnapshot, frame: list[str]) -> list[tuple[str, str]]:
+def _frame_labels(snapshot: A11ySnapshot, frame: list[str]) -> list[tuple[SnapshotNode, str]]:
     return [
-        (node.role, " ".join((node.name or node.text).split()))
+        (node, " ".join((node.name or node.text).split()))
         for node in snapshot.nodes
         if node.frame_path == frame and (node.name or node.text)
     ]
+
+
+# A value cell starts at most this far right of its label cell.
+LABEL_GAP_PX = 40
+
+
+def beside_a_label(node: SnapshotNode, snapshot: A11ySnapshot) -> bool:
+    """Text just right of other static text in the same row: the value half of a label and value
+    pair, such as a member's name next to "Name". Record-specific even when it is not digits."""
+    box = node.box
+    if box is None:
+        return False
+    for other in snapshot.nodes:
+        near = other.box
+        if other is node or near is None or other.frame_path != node.frame_path:
+            continue
+        if other.role in _CONTROL_ROLES or other.clickable or not (other.name or other.text):
+            continue
+        overlap = min(box.y + box.h, near.y + near.h) - max(box.y, near.y)
+        gap = box.x - (near.x + near.w)
+        if overlap >= 0.5 * min(box.h, near.h) and -1 <= gap <= LABEL_GAP_PX:
+            return True
+    return False
 
 
 def _new_heading(
@@ -224,8 +290,10 @@ def _new_heading(
     """The first text that appeared in the frame and reads like interface, not data."""
     seen = {label for _, label in _frame_labels(before, frame)}
     low, high = CHECKPOINT_TEXT_LEN
-    for role, label in _frame_labels(after, frame):
-        if label in seen or role in _CONTROL_ROLES or not low <= len(label) <= high:
+    for node, label in _frame_labels(after, frame):
+        if label in seen or node.role in _CONTROL_ROLES or not low <= len(label) <= high:
+            continue
+        if beside_a_label(node, after):
             continue
         if looks_like_data(label) or SENSITIVE_FIELD_RE.search(label) or "{{" in label:
             continue
@@ -238,6 +306,15 @@ def _new_heading(
 def _visible_in_frame(literal: str, snapshot: A11ySnapshot, frame: list[str]) -> bool:
     pattern = _word_boundary(literal)
     return any(pattern.search(label) for _, label in _frame_labels(snapshot, frame))
+
+
+def _relative_to_entry(url: str, entry_url: str) -> str:
+    """A same-origin URL under the entry URL becomes a template, so tenants keep their own host."""
+    if url.startswith(entry_url) and (
+        entry_url.endswith("/") or url[len(entry_url) :][:1] in "/?#"
+    ):
+        return ENTRY_URL + url[len(entry_url) :]
+    return url
 
 
 def _changed_frame(before: A11ySnapshot, after: A11ySnapshot) -> list[str]:
@@ -363,16 +440,24 @@ def build_capability(
         target = step.target.target if step.target else None
         risk = step.risk
         if step.action == "navigate":
-            url = step.url or ENTRY_URL
-            description = (
-                "Open the application entry page." if url == ENTRY_URL else f"Open {prose(url)}."
-            )
+            raw = step.url or ENTRY_URL
+            if raw == ENTRY_URL:
+                url, description = ENTRY_URL, "Open the application entry page."
+            else:
+                url = _relative_to_entry(templated(raw), record.entry_url)
+                path_only = re.sub(r"^[a-z][a-z0-9+.-]*://[^/]*", "", TEMPLATE_RE.sub("", url))
+                if re.search(r"[0-9]{5,}", path_only):
+                    raise BuildError(
+                        f"step {step_id} navigates to a URL that still holds a record number; "
+                        "accept that value as an input, or reach the page through the screens"
+                    )
+                description = f"Open {normalize_prose(redactor.text(url))}."
             steps.append(
                 NavigateStep(
                     id=step_id,
                     action="navigate",
                     description=description,
-                    url=url if url == ENTRY_URL else templated(url),
+                    url=url,
                     risk=risk,
                     wait_for=wait,
                 )

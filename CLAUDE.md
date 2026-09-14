@@ -230,37 +230,62 @@ Git: SSH remote only, identity from global config, no Co-Authored-By or Claude a
 - Secrets: the model types `{{secrets.name}}` templates and never sees values. A credential goes
   only into a field that looks like a credential field, and a literal typed into a credential
   field is refused.
-- Recording: a target's ladder is recorded before the action, on the screen the model saw. A
-  literal the model typed that the goal also names becomes a proposed input (name from the field's
-  label, a digit pattern for digit strings). A human confirms at the end, by prompt or `--yes`; a
-  declined literal stays literal. `cua discover` refuses to start without a terminal or `--yes`.
+- Recording: a target's ladder is recorded before the action, on the screen the model saw, and
+  its notes give a reason per kept rung. A literal the goal names becomes a proposed input when the
+  run typed or chose it (name from the field's label) or put it in a navigated URL (segments and
+  query values with a digit; name from the preceding segment, `members/10007` -> `member_id`).
+  Digit patterns are fixed length only when the field's maxlength enforces it, else `^[0-9]+$`. A
+  human confirms at the end, by prompt or `--yes`; a declined literal stays literal. Same-origin
+  URLs are rewritten under `{{surface.entry_url}}`, and a URL still holding a 5+ digit number fails
+  the build. Dialog message patterns keep the wording and generalize digit runs.
+- Preflight, before any model call: the capability id shape, and that `<id>@1.0.0` is not already
+  in the catalog. `cua discover` also refuses to start without a terminal or `--yes`.
 - Waits: type and select steps settle. Other steps wait on a derived checkpoint: the first new
-  interface text in the next target's frame (not data, not a control's label, not a typed literal)
-  plus the next target present. The last step waits on the success checkpoint: that text, each
+  interface text in the next target's frame (not data, not a control's label, not a typed literal,
+  and not a value cell sitting just right of a label cell, such as a member's name) plus the next
+  target present. A done target in a value cell is volatile too. The last step waits on the success checkpoint: that text, each
   accepted input's template when its value is on screen, and the output and done targets present.
   The success checkpoint must hold on the final screen or the draft is not saved.
 - Drafts have no outcome detectors. One happy run cannot observe not-found, interstitial, slow,
   expiry, or app errors, so review adds them and tunes timeouts; `review_notes` says so.
 - Outputs are recorded sensitive. From `declare_output` on, the value (and its bare number forms)
-  is added to the redactor, so logs and the model's later screens mask it; `read_text` contents are
-  never logged; screenshots from that screen on are flagged sensitive in the manifest.
+  is added to the redactor as a whole token, so logs and the model's later screens mask it;
+  `read_text` contents are never logged; screenshots from that screen on are flagged sensitive.
+  Model-written text (rationale, summary, reasons, tool arguments) is logged after the tool runs and
+  through `Redactor.free_text`, which also masks amounts, because the model may quote a value
+  before declaring it or in a run that never declares one. The prompt asks it not to.
 - Stuck: the same call three times running (refs compared by frame, role, and name), or two acting
-  turns running with no snapshot digest change, plus max steps, timeout, and give_up. Until phase 5
-  a stuck run stops with status `stopped`, exit 2, and keeps its last accessibility snapshot.
+  turns running with no snapshot digest change (Tab and scroll do not count, they can be legit
+  no-ops), plus max steps, timeout, and give_up. Until phase 5 a stuck run stops with status
+  `stopped`, exit 2, and keeps its last accessibility snapshot. The timeout is checked between
+  turns, so a turn in flight finishes first: at most two model calls of 90 s plus a 10 s settle.
+- A reply cut off at `max_tokens` (now 2048) is never executed; the model is told to shorten.
 - The SDK's own retries are off; the loop retries a transient error (connection, timeout, 408, 409,
   429, 529, 5xx) exactly once and fails the run on the second.
-- `request_confirmation` is denied unless `--allow-irreversible`; with it, it arms confirmation for
-  the next irreversible action only, via `GatedSurface.perform(confirmed=True)`. `escalate` handling
-  is never satisfied, and the model is told to give up rather than work around it.
+- `request_confirmation` is denied unless `--allow-irreversible`; with it, it covers exactly the
+  next tool call, whatever it is, via `GatedSurface.perform(confirmed=True)`. So a dialog flow is:
+  confirm, click (the dialog is reported and dismissed), confirm, click with dialog accept.
+  `escalate` handling is never satisfied, and the model is told to give up rather than work around
+  it. Screen text is declared untrusted data in the prompt; the gate bounds what injection can do.
+- Late side effects: an act that can start a navigation (click, key, navigate) stays open until no
+  request has started for 150 ms (capped at 1 s), so the navigation is routed and judged inside
+  that act and a confirmation still covers it. After every settle the loop drains stray events; a
+  refused navigation or an unexpected dialog there marks the action failed and drops its step.
 - `settle` counts its own call as activity. Found by probe: an observation right after a submit
   could still show the sign-in page because the request event arrived after the first idle check.
 - Evidence: `evidence/<run_id>/` with `run.jsonl`, `step_NN.png`, `result.json`, `manifest.json`,
-  `artifact.capability.json`, and `a11y_NN.json` when stopped. `--evidence-root` defaults to
-  `evidence/_scratch`, which is gitignored.
+  `artifact.capability.json`, and `a11y_NN.json` when stopped (`a11y_final.json` when done was
+  reached but no draft was saved). A crash still writes `result.json` and the last snapshot.
+  `tool_result` events carry `step_id` and the recorded rung; `checkpoints_derived` and
+  `success_checkpoint` events show the waits and the final check. Redaction skips `ts`, `digest`,
+  and `sha256`, and keeps URL ports. `--evidence-root` defaults to `evidence/_scratch`
+  (gitignored). No Playwright trace in discovery: the phase 4 trace writer must first keep the
+  sign-in POST out of traces, then discovery can reuse it.
 - Limit for REPORT.md: names and other free text are not detected, so the synthetic member's name
   appears in the model's rationale.
 - The first real run was deleted (empty rationale, balance in the log). Both were fixed with tests
-  and the run was redone as `evidence/disc_20260914T051827Z_51db/`.
+  and the run was redone. After the phase 3 review (1 blocking, 2 high, 8 lower findings, all
+  fixed) the run was redone once more so the committed evidence matches the recorder.
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 

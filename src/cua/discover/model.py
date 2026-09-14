@@ -75,7 +75,7 @@ def turn_from_message(message: Any) -> ModelTurn:
 
 class AnthropicModel:
     def __init__(
-        self, api_key: str, model: str, *, max_tokens: int = 1024, timeout_s: float = 90.0
+        self, api_key: str, model: str, *, max_tokens: int = 2048, timeout_s: float = 90.0
     ) -> None:
         self.model = model
         self._max_tokens = max_tokens

@@ -54,6 +54,30 @@ def looks_like_data(text: str) -> bool:
     return bool(DATA_LIKE_RE.search(text))
 
 
+def _reason(rung: Rung) -> str:
+    """Why a kept rung is trustworthy, in the words a reviewer checks it against."""
+    if isinstance(rung, RoleNameRung):
+        return (
+            f"role_name: the accessibility tree calls it {rung.role} '{rung.name}', the handle "
+            "least tied to layout"
+        )
+    if isinstance(rung, LabelTextRung):
+        return (
+            f"label_text: reached through its visible label '{rung.label}' "
+            f"({rung.relation.replace('_', ' ')}), which survives the control moving"
+        )
+    if isinstance(rung, TextExactRung):
+        return f"text_exact: its own text '{rung.text}' is interface wording, not data"
+    if isinstance(rung, AnchorRelativeRung):
+        row = " in the same row" if rung.same_row else ""
+        slot = f", number {rung.nth} that way" if rung.nth > 1 else ""
+        return (
+            f"anchor_relative: the {rung.target_kind} {rung.direction} of the fixed text "
+            f"'{rung.anchor_text}'{row}{slot}, which survives the element itself being renamed"
+        )
+    return "bbox: coordinates as a last resort, broken by any layout change"
+
+
 def _confidence(rung: Rung) -> float:
     if isinstance(rung, RoleNameRung):
         return 0.95
@@ -182,12 +206,19 @@ def record(
             f"tried {', '.join(dropped) or 'nothing'}"
         )
     weak = not any(r.strategy in ("role_name", "label_text", "text_exact") for r in kept)
-    notes = (
-        f"Recorded from the live page: each rung resolved to exactly this element. "
-        f"Kept {', '.join(r.strategy for r in kept)}."
-        + (f" Dropped {'; '.join(dropped)}." if dropped else "")
+    if volatile_text:
+        private_note = " Its own text is data that changes per record, so nothing keys on it."
+    elif sensitive:
+        private_note = " It takes or shows sensitive data, so its text is never recorded."
+    else:
+        private_note = ""
+    notes = normalize_prose(
+        "Every rung here resolved to exactly this element on the live page. "
+        + " ".join(f"{_reason(r)}." for r in kept)
+        + private_note
+        + (f" Dropped: {'; '.join(dropped)}." if dropped else "")
         + (
-            " Weak target: no name, label, or stable text, so it relies on position."
+            " Weak target: only position identifies it, so replay reports any fallback as drift."
             if weak
             else ""
         )

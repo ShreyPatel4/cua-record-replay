@@ -16,7 +16,7 @@ from playwright.sync_api import Browser
 
 from cua.artifact.catalog import load_capability
 from cua.artifact.schema import AllOf, CheckpointWait, ElementPresent, TextPresent, TypeTextStep
-from cua.discover.model import ModelTurn, ToolUse
+from cua.discover.model import ModelTurn, ToolUse, TransientModelError
 from cua.discover.record import ParamProposal, SecretSpec
 from cua.discover.run import DiscoverRequest, DiscoveryResult, run_discovery
 from mock_app.data import money
@@ -30,7 +30,8 @@ pytestmark = pytest.mark.browser
 LINE = re.compile(
     r'^\s*\[(?P<ref>\w+)\] (?P<role>\w+)(?: "(?P<label>(?:[^"\\]|\\.)*)")?[^@]*@(?P<frame>\S+)'
 )
-Move = Callable[[str], tuple[str, dict[str, Any]]]
+# A move returns (tool, arguments) or (tool, arguments, rationale).
+Move = Callable[[str], tuple[Any, ...]]
 SECRETS = [
     SecretSpec("operator_id", "CORELEDGER_OPERATOR_USER", "identity"),
     SecretSpec("operator_password", "CORELEDGER_OPERATOR_PASSWORD", "credential"),
@@ -45,14 +46,21 @@ def _latest_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return content
 
 
-def ref(screen: str, role: str, label: str | None = None, *, after: str | None = None) -> str:
+def ref(
+    screen: str,
+    role: str,
+    label: str | None = None,
+    *,
+    after: str | None = None,
+    frame: str = "main",
+) -> str:
     lines = screen.splitlines()
     start = 0
     if after is not None:
         start = next(i for i, line in enumerate(lines) if f'"{after}"' in line) + 1
     for line in lines[start:]:
         match = LINE.match(line)
-        wanted = match is not None and match["role"] == role and match["frame"] == "main"
+        wanted = match is not None and match["role"] == role and match["frame"] == frame
         if wanted and match is not None and (label is None or match["label"] == label):
             return match["ref"]
     raise AssertionError(f"no {role} {label!r} on screen:\n{screen}")
@@ -63,15 +71,20 @@ class ScriptedModel:
 
     model = "scripted-test-model"
 
-    def __init__(self, moves: list[Move]) -> None:
+    def __init__(self, moves: list[Move], *, fail_first_call: bool = False) -> None:
         self.moves = moves
         self.screens: list[str] = []
         self.results: list[str] = []
+        self.calls = 0
+        self.fail_first_call = fail_first_call
 
     def complete(
         self, *, system: str, tools: list[dict[str, Any]], messages: list[dict[str, Any]]
     ) -> ModelTurn:
         assert "request_confirmation" in system
+        self.calls += 1
+        if self.fail_first_call and self.calls == 1:
+            raise TransientModelError("HTTP 529: OverloadedError")
         blocks = _latest_blocks(messages)
         texts = [b["text"] for b in blocks if b.get("type") == "text"]
         screen = next(t for t in texts if t.startswith("Screen "))
@@ -79,18 +92,20 @@ class ScriptedModel:
         if len(messages) > 1:
             self.results.append(texts[0])
         index = len(self.screens) - 1
-        name, args = (
+        move = (
             self.moves[index](screen)
             if index < len(self.moves)
             else ("give_up", {"reason": "the script ran out"})
         )
+        name, args = move[0], move[1]
+        rationale = move[2] if len(move) > 2 else f"Scripted move {index}."
         use = ToolUse(id=f"toolu_{index:02d}", name=name, input=args)
         return ModelTurn(
-            text=f"Scripted move {index}.",
+            text=rationale,
             tool_uses=[use],
             stop_reason="tool_use",
             content=[
-                {"type": "text", "text": f"Scripted move {index}."},
+                {"type": "text", "text": rationale},
                 {"type": "tool_use", "id": use.id, "name": name, "input": args},
             ],
         )
@@ -124,10 +139,10 @@ READ_BALANCE: list[Move] = [
 GOAL = "Log in, look up member 10007 and read their current savings balance."
 
 
-def _policy_file(tmp_path: Path, base_url: str) -> Path:
+def _policy_file(tmp_path: Path, base_url: str, extra: str = "") -> Path:
     text = (ROOT / "policy" / "allowlist.yaml").read_text(encoding="utf-8")
     path = tmp_path / "allowlist.yaml"
-    path.write_text(text.replace("http://127.0.0.1:5050", base_url), encoding="utf-8")
+    path.write_text(text.replace("http://127.0.0.1:5050", base_url) + extra, encoding="utf-8")
     return path
 
 
@@ -140,9 +155,11 @@ def _discover(
     *,
     goal: str = GOAL,
     confirm: Callable[[list[ParamProposal]], list[ParamProposal]] = lambda proposals: proposals,
+    policy_extra: str = "",
+    fail_first_call: bool = False,
     **overrides: Any,
 ) -> tuple[DiscoveryResult, ScriptedModel, Path]:
-    policy_file = _policy_file(tmp_path, coreledger.base_url)
+    policy_file = _policy_file(tmp_path, coreledger.base_url, policy_extra)
     fields: dict[str, Any] = {
         "goal": goal,
         "entry_url": coreledger.base_url + "/",
@@ -156,7 +173,7 @@ def _discover(
         "max_steps": 20,
         "timeout_s": 90,
     }
-    model = ScriptedModel(moves)
+    model = ScriptedModel(moves, fail_first_call=fail_first_call)
     result = run_discovery(
         DiscoverRequest(**(fields | overrides)),
         model=model,
@@ -232,10 +249,18 @@ def test_a_scripted_run_records_a_valid_parameterized_draft(
 def test_the_model_and_the_evidence_never_see_secrets_or_full_member_numbers(
     tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
 ) -> None:
+    def quoting_the_balance(screen: str) -> tuple[Any, ...]:
+        amount = re.search(r'"Share Savings"[^\n]*\n[^"]*"([^"]+)"', screen)
+        assert amount is not None
+        name, args = READ_BALANCE[0](screen)
+        return name, args, f"The Share Savings balance reads {amount.group(1)}; declaring it."
+
+    moves = [*SIGN_IN, *LOOK_UP, quoting_the_balance, READ_BALANCE[1]]
     result, model, _ = _discover(
-        tmp_path, coreledger, mock_settings, browser, SIGN_IN + LOOK_UP + READ_BALANCE
+        tmp_path, coreledger, mock_settings, browser, moves, fail_first_call=True
     )
     assert result.status == "recorded", result.message
+    assert model.calls == len(moves) + 1, "the first call failed once and was retried"
     for screen in model.screens:
         assert mock_settings.operator_password not in screen
         assert mock_settings.operator_user not in screen
@@ -256,7 +281,11 @@ def test_the_model_and_the_evidence_never_see_secrets_or_full_member_numbers(
     events = [json.loads(line) for line in (evidence / "run.jsonl").read_text().splitlines()]
     kinds = {e["event"] for e in events}
     assert {"run_started", "observation", "model_turn", "tool_result", "decision"} <= kinds
-    assert {"parameters_confirmed", "artifact_saved", "run_finished"} <= kinds
+    assert {"parameters_confirmed", "artifact_saved", "run_finished", "model_retry"} <= kinds
+    assert {"checkpoints_derived", "success_checkpoint"} <= kinds
+    recorded = [e for e in events if e["event"] == "tool_result" and "step_id" in e]
+    assert [e["step_id"] for e in recorded] == ["s02", "s03", "s04", "s05", "s06"]
+    assert all("rung" in e for e in recorded)
     rationale = [e["rationale"] for e in events if e["event"] == "model_turn"]
     assert rationale[0] == "Scripted move 0."
     manifest = json.loads((evidence / "manifest.json").read_text())
@@ -267,7 +296,7 @@ def test_the_model_and_the_evidence_never_see_secrets_or_full_member_numbers(
     log = (evidence / "run.jsonl").read_text()
     savings = coreledger.state.ledger.members["10007"].savings
     for form in (money(savings), f"{savings:,.2f}", f"{savings:.2f}"):
-        assert form not in log, "the declared balance never reaches the log"
+        assert form not in log, "the declared balance never reaches the log, rationale included"
     assert "Scripted move" in log, "the model's rationale does"
 
 
@@ -355,6 +384,7 @@ def test_a_confirmed_run_answers_the_dialog_and_records_an_irreversible_step(
         ),
         lambda s: ("request_confirmation", {"reason": "open the sub-account"}),
         create,
+        lambda s: ("request_confirmation", {"reason": "accept the confirm dialog"}),
         lambda s: (
             "click",
             {"ref": ref(s, "cell", "Create sub-account"), "dialog": "accept"},
@@ -397,3 +427,80 @@ def test_a_confirmed_run_answers_the_dialog_and_records_an_irreversible_step(
     assert "Sub-account opened" in {
         c.text for c in success.conditions if isinstance(c, TextPresent)
     }
+
+
+def test_a_confirmation_covers_only_the_next_call(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    rule = (
+        "    risk:\n      irreversible_when:\n        - url_matches: /members/*/subaccounts/new\n"
+    )
+
+    def form(_: str) -> tuple[Any, ...]:
+        return "navigate", {"url": coreledger.base_url + "/members/10007/subaccounts/new"}
+
+    moves: list[Move] = [
+        *SIGN_IN,
+        lambda s: ("request_confirmation", {"reason": "open the form"}),
+        form,
+        form,
+    ]
+    result, model, _ = _discover(
+        tmp_path,
+        coreledger,
+        mock_settings,
+        browser,
+        moves,
+        goal="Open the sub-account form for member 10007.",
+        capability_id="coreledger.member.open_subaccount",
+        policy_id="coreledger-subaccount",
+        allow_irreversible=True,
+        policy_extra=rule,
+    )
+    assert result.stop_reason == "gave_up"
+    assert model.results[4] == "Navigated."
+    # Refused before acting: the gate sees the form in the frame and nothing arms it any more.
+    assert model.results[5].startswith("Refused: call request_confirmation")
+
+
+def test_a_url_holding_the_member_number_is_recorded_as_a_template(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    def balance(screen: str) -> str:
+        return ref(screen, "cell", after="Share Savings", frame="top")
+
+    moves: list[Move] = [
+        *SIGN_IN,
+        # A top-level navigate replaces the frameset, so the profile is in the top document.
+        lambda s: ("navigate", {"url": coreledger.base_url + "/members/10007"}),
+        lambda s: (
+            "declare_output",
+            {"name": "savings_balance", "ref": balance(s), "type": "money"},
+        ),
+        lambda s: ("done", {"summary": "Read it.", "checkpoint_ref": balance(s)}),
+    ]
+    result, _, policy_file = _discover(tmp_path, coreledger, mock_settings, browser, moves)
+    assert result.status == "recorded", result.message
+    assert result.artifact_path is not None
+    capability = load_capability(Path(result.artifact_path), policy_file)
+    navigate = capability.steps[4]
+    assert navigate.action == "navigate"
+    assert navigate.url == "{{surface.entry_url}}members/{{inputs.member_id}}"
+    assert [(i.name, i.pattern) for i in capability.inputs] == [("member_id", "^[0-9]+$")]
+    assert "10007" not in Path(result.artifact_path).read_text()
+
+
+def test_the_member_name_is_never_a_checkpoint(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    """Done on the name cell: it is record data, so no rung, fingerprint, or text keys on it."""
+    moves: list[Move] = [
+        *SIGN_IN,
+        *LOOK_UP,
+        lambda s: ("done", {"summary": "Found.", "checkpoint_ref": ref(s, "cell", after="Name")}),
+    ]
+    result, _, _ = _discover(tmp_path, coreledger, mock_settings, browser, moves)
+    assert result.status == "recorded", result.message
+    assert result.artifact_path is not None
+    name = coreledger.state.ledger.members["10007"].name
+    assert name not in Path(result.artifact_path).read_text()

@@ -113,6 +113,28 @@ def test_a_click_that_navigates_off_policy_is_cancelled_in_flight(
     expect(main.get_by_text("Member Lookup")).to_be_visible()
 
 
+def test_a_navigation_that_starts_just_after_a_click_is_judged_inside_that_act(
+    surface: PlaywrightSurface, coreledger: RunningMockApp, mock_settings: MockSettings
+) -> None:
+    """Found in review: a link's request can reach routing after click() returns, and the refusal
+    then landed outside the act, so a blocked click read as a successful one."""
+    main = _sign_in(surface, coreledger.base_url, mock_settings)
+    main.evaluate(
+        """() => {
+          const span = document.createElement("span");
+          span.textContent = "Leave shortly";
+          span.setAttribute("onclick", "setTimeout(() => { location.href = '/logout'; }, 60)");
+          document.body.appendChild(span);
+        }"""
+    )
+    gated = _gate(surface, coreledger.base_url)
+    result = gated.perform(Click(_by_name(surface, "Leave shortly")))
+    assert result.ok is False
+    assert result.code == "POLICY_BLOCKED"
+    assert [e.kind for e in result.events] == ["navigation_blocked"]
+    assert "/members/search" in main.url
+
+
 def test_a_redirect_off_policy_is_refused_before_the_browser_follows_it(
     surface: PlaywrightSurface, coreledger: RunningMockApp, mock_settings: MockSettings
 ) -> None:

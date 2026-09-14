@@ -6,9 +6,8 @@ Every action goes through GatedSurface; every target becomes a verified ladder b
 from __future__ import annotations
 
 import base64
-import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -23,6 +22,8 @@ from cua.discover.record import (
     ObservedStep,
     SecretSpec,
     StepAction,
+    beside_a_label,
+    dialog_message_pattern,
 )
 from cua.discover.tools import (
     ClickCall,
@@ -51,6 +52,7 @@ from cua.policy.redact import MIN_SECRET_LEN, Redactor
 from cua.replay.extract import ExtractionError, parse_value
 from cua.replay.result import MoneyValue
 from cua.surface.base import (
+    BLOCKING_EVENTS,
     A11ySnapshot,
     Action,
     ActResult,
@@ -65,6 +67,7 @@ from cua.surface.base import (
     SnapshotNode,
     Surface,
     SurfaceError,
+    SurfaceEvent,
     TypeText,
 )
 from cua.vocab import SENSITIVE_FIELD_RE, RiskClass, is_single_template, template_refs
@@ -88,6 +91,10 @@ _PARSE: dict[str, Literal["money_usd", "text", "integer", "date_iso"]] = {
     "date": "date_iso",
 }
 REPEAT_LIMIT = 3
+CUT_OFF = (
+    "Your reply hit the token limit before a complete tool call. Keep the rationale to one "
+    "sentence and call one tool."
+)
 NO_PROGRESS_LIMIT = 2
 
 
@@ -154,6 +161,21 @@ def ask_with_one_retry(ask: Callable[[], ModelTurn], on_retry: Callable[[str], N
         return ask()
 
 
+def late_event_report(events: Sequence[SurfaceEvent]) -> tuple[str | None, list[dict[str, str]]]:
+    """Side effects that arrived after an act returned: what to log, and what to tell the model
+    when one means the action did not do what it seemed to (a refused navigation, a dialog)."""
+    logged = [{"kind": e.kind, "detail": e.detail, "url": e.url} for e in events]
+    serious = [e for e in events if e.kind in BLOCKING_EVENTS or e.kind == "unexpected_dialog"]
+    if not serious:
+        return None, logged
+    first = serious[0]
+    return (
+        f"After the action the page reported {first.kind}: {first.detail}. It did not take "
+        "effect as intended.",
+        logged,
+    )
+
+
 @dataclass
 class _Screen:
     turn: int
@@ -208,11 +230,23 @@ class DiscoveryLoop:
         self._confirmation_armed = False
         self._record: DiscoveryRecord | None = None
         self._screen_name = ""
+        self._last_screen: _Screen | None = None
         self._shows_sensitive_output = False
 
     # ---- the loop -------------------------------------------------------------------------------
 
     def run(self) -> DiscoveryOutcome:
+        """Run to a stop. An unexpected exception still leaves its last screen in the evidence."""
+        try:
+            return self._run()
+        except Exception as exc:
+            self._evidence.event("discovery", "run_crashed", error=f"{type(exc).__name__}: {exc}")
+            if self._last_screen is not None:
+                with suppress(Exception):
+                    self._final_evidence(self._last_screen)
+            raise
+
+    def _run(self) -> DiscoveryOutcome:
         started = self._clock()
         config = self._config
         tokens_in = tokens_out = 0
@@ -224,7 +258,7 @@ class DiscoveryLoop:
                 "discovery",
                 "run_finished",
                 stop_reason=reason,
-                message=message,
+                message=self._redactor.free_text(message),
                 turns=turn,
                 duration_ms=elapsed,
                 input_tokens=tokens_in,
@@ -285,7 +319,7 @@ class DiscoveryLoop:
                     partial(
                         self._model.complete, system=SYSTEM_PROMPT, tools=TOOLS, messages=messages
                     ),
-                    partial(self._evidence.event, "discovery", "model_retry", turn=turn),
+                    partial(self._log_retry, turn),
                 )
             except (TransientModelError, ModelError) as exc:
                 self._final_evidence(screen)
@@ -293,24 +327,23 @@ class DiscoveryLoop:
             tokens_in += reply.input_tokens
             tokens_out += reply.output_tokens
             content = reply.content or [{"type": "text", "text": "(no reply)"}]
+            model_log: dict[str, Any] = {
+                "turn": turn,
+                "stop_reason": reply.stop_reason,
+                "input_tokens": reply.input_tokens,
+                "output_tokens": reply.output_tokens,
+                "duration_ms": int((self._clock() - asked) * 1000),
+            }
+            cut_off = reply.stop_reason == "max_tokens"
             if not reply.tool_uses:
-                self._evidence.event("model", "model_turn", turn=turn, rationale=reply.text)
-                history.append(_Exchange(content, None, "Call exactly one tool.", True))
+                model_log["rationale"] = self._redactor.free_text(reply.text)
+                self._evidence.event("model", "model_turn", **model_log)
+                nudge = CUT_OFF if cut_off else "Call exactly one tool."
+                history.append(_Exchange(content, None, nudge, True))
                 continue
             use = reply.tool_uses[0]
-            call = parse_tool_call(use.name, use.input)
-            self._evidence.event(
-                "model",
-                "model_turn",
-                turn=turn,
-                rationale=reply.text,
-                tool=use.name,
-                arguments=use.input,
-                stop_reason=reply.stop_reason,
-                input_tokens=reply.input_tokens,
-                output_tokens=reply.output_tokens,
-                duration_ms=int((self._clock() - asked) * 1000),
-            )
+            call = ToolError(use.name, CUT_OFF) if cut_off else parse_tool_call(use.name, use.input)
+            armed = self._confirmation_armed
             acted_at = self._clock()
             repeated = stuck.note_call(self._repeat_key(call, use.name, screen.snapshot))
             if repeated is not None:
@@ -319,24 +352,52 @@ class DiscoveryLoop:
                 outcome = _Outcome(f"Invalid {call.tool} call: {call.message}", is_error=True)
             else:
                 outcome = self._execute(call, screen.snapshot)
+            if armed and not isinstance(call, RequestConfirmationCall):
+                # A confirmation covers exactly the next call, whatever that call was.
+                self._confirmation_armed = False
             if outcome.acted:
                 self._settle()
+                warning, late = late_event_report(self._surface.drain_events())
+                if late:
+                    outcome.log["late_events"] = late
+                if warning is not None:
+                    outcome.is_error = True
+                    outcome.text += f" {warning}"
+                    if outcome.step is not None:
+                        outcome.text += " The step was not recorded."
+                        outcome.step = None
                 after = self._observe(turn)
                 if outcome.step is not None:
                     self._steps.append(replace(outcome.step, after=after.snapshot))
-                if outcome.stop is None:
+                    outcome.log["step_id"] = f"s{len(self._steps):02d}"
+                    if outcome.step.target is not None:
+                        outcome.log["rung"] = outcome.step.target.target.ladder[0].strategy
+                neutral = isinstance(call, ScrollCall) or (
+                    isinstance(call, PressKeyCall) and call.key == "Tab"
+                )
+                if outcome.stop is None and not neutral:
                     outcome.stop = stuck.note_act(screen.snapshot.digest, after.snapshot.digest)
                     if outcome.stop is not None:
                         outcome.text += " Stopped: two actions in a row changed nothing on screen."
                 screen = after
+            # Logged after the tool ran, so a value declared this turn is already masked here.
+            self._evidence.event(
+                "model",
+                "model_turn",
+                **model_log,
+                rationale=self._redactor.free_text(reply.text),
+                tool=use.name,
+                arguments=self._loggable(use.input),
+            )
             text = self._redactor.text(outcome.text)
+            logged = outcome.text if outcome.logged is None else outcome.logged
             self._evidence.event(
                 "discovery",
                 "tool_result",
                 turn=turn,
                 tool=use.name,
                 ok=not outcome.is_error,
-                message=text if outcome.logged is None else self._redactor.text(outcome.logged),
+                message=self._redactor.free_text(logged),
                 duration_ms=int((self._clock() - acted_at) * 1000),
                 **outcome.log,
             )
@@ -345,6 +406,18 @@ class DiscoveryLoop:
                 if outcome.stop != "done":
                     self._final_evidence(screen)
                 return finish(outcome.stop, text)
+
+    def _log_retry(self, turn: int, detail: str) -> None:
+        self._evidence.event("discovery", "model_retry", turn=turn, error=detail)
+
+    def _loggable(self, arguments: object) -> object:
+        """Tool arguments for the log: free text such as a summary has its amounts masked."""
+        if not isinstance(arguments, dict):
+            return arguments
+        return {
+            key: self._redactor.free_text(value) if isinstance(value, str) else value
+            for key, value in arguments.items()
+        }
 
     # ---- model context --------------------------------------------------------------------------
 
@@ -431,7 +504,8 @@ class DiscoveryLoop:
             digest=snapshot.digest[:12],
             nodes=len(snapshot.nodes),
         )
-        return _Screen(turn=turn, snapshot=snapshot, png=png, screenshot=name)
+        self._last_screen = _Screen(turn=turn, snapshot=snapshot, png=png, screenshot=name)
+        return self._last_screen
 
     def _final_evidence(self, screen: _Screen | None) -> None:
         """A stopped run keeps the accessibility snapshot it stopped on, redacted."""
@@ -523,8 +597,6 @@ class DiscoveryLoop:
         self._log_act(action.kind, result)
         decision = self._gated.last_decision
         risk: RiskClass = decision.risk if decision is not None else declared_risk
-        if result.ok and risk == "irreversible":
-            self._confirmation_armed = False
         return result, risk
 
     def _refusal(self, result: ActResult) -> str:
@@ -609,7 +681,7 @@ class DiscoveryLoop:
             dialog_type, message = seen
             expected = ExpectedDialog(
                 dialog_type="confirm" if dialog_type == "confirm" else "alert",
-                message_pattern="^" + re.escape(message) + "$",
+                message_pattern=dialog_message_pattern(message),
                 response=call.dialog,
             )
             if expected.dialog_type == "confirm" and call.dialog == "accept":
@@ -680,6 +752,10 @@ class DiscoveryLoop:
                 "like its field. Choose the right field.",
                 is_error=True,
             )
+        try:
+            max_length = self._surface.describe(element).max_length
+        except SurfaceError:
+            max_length = None
         text = secret.value if secret is not None else call.text
         result, risk = self._perform(
             TypeText(element, text, clear_first=call.clear_first), declared_risk="reversible"
@@ -695,6 +771,7 @@ class DiscoveryLoop:
             target=recording,
             value=call.text,
             clear_first=call.clear_first,
+            max_length=max_length,
         )
         return _Outcome(f"Typed {call.text}.", acted=True, step=step, log=log)
 
@@ -771,7 +848,7 @@ class DiscoveryLoop:
         if isinstance(found, str):
             return _Outcome(found, is_error=True)
         element, node = found
-        volatile = looks_like_data(node.name or node.text)
+        volatile = looks_like_data(node.name or node.text) or beside_a_label(node, snapshot)
         recording = self._recording(element, node, sensitive=volatile, volatile=volatile)
         if isinstance(recording, str):
             return _Outcome(recording, is_error=True)

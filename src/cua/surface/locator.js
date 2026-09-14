@@ -281,6 +281,7 @@
       labels,
       anchors,
       frame_box: frameBox,
+      max_length: formControl && el.maxLength > 0 ? el.maxLength : null,
     };
   };
 

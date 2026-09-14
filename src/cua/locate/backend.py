@@ -55,6 +55,7 @@ class ElementFacts(FactsModel):
     labels: list[LabelFact] = Field(description="Label candidates, most specific first.")
     anchors: list[AnchorFact] = Field(description="Anchor candidates, nearest first.")
     frame_box: NormBox | None = Field(description="Box normalized to the frame viewport.")
+    max_length: int | None = Field(default=None, description="A text input's maxlength, if set.")
 
 
 @runtime_checkable

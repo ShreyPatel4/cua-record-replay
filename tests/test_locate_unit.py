@@ -177,6 +177,7 @@ def test_a_target_known_only_by_position_is_weak() -> None:
     assert [r.strategy for r in recording.target.ladder] == ["anchor_relative", "bbox"]
     assert recording.weak
     assert "Weak target" in recording.target.notes
+    assert "anchor_relative: the " in recording.target.notes
 
 
 def test_coordinates_alone_cannot_be_recorded() -> None:

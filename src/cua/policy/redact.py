@@ -15,6 +15,7 @@ from urllib.parse import quote, quote_plus
 from cua.vocab import SENSITIVE_FIELD_RE
 
 REDACTED = "[REDACTED]"
+AMOUNT = "[AMOUNT]"
 MIN_SECRET_LEN = 4
 # Credentials at least this long are matched anywhere, including inside base64 and longer tokens.
 # Shorter ones (a 4-digit PIN) only as whole tokens, or every "1234" in a log would vanish.
@@ -29,10 +30,24 @@ _NUMBER_RE = re.compile(
     r"|(?<![0-9])[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?(?![0-9])"
     r"|(?<![0-9])[0-9]+\.[0-9]+(?![0-9])"
     r"|(?<![0-9])[0-9]{8}T[0-9]{6}Z?(?![0-9])"
+    r"|(?<=:)[0-9]{2,5}(?=[/?#])"
     r")"
     r"|(?<![0-9])(?P<digits>[0-9]{5,})(?![0-9])"
 )
 _WORD_CHARS = "A-Za-z0-9"
+# Money in prose someone wrote about the screen: masked there, kept in app text and messages.
+_AMOUNT_RE = re.compile(
+    r"\$\s?[0-9][0-9,]*(?:\.[0-9]+)?"
+    r"|(?<![0-9])[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?(?![0-9])"
+    r"|(?<![0-9.])[0-9]+\.[0-9]{2}(?![0-9])"
+)
+
+
+def _token_pattern(tokens: set[str]) -> re.Pattern[str] | None:
+    if not tokens:
+        return None
+    alternation = "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True))
+    return re.compile(f"(?<![{_WORD_CHARS}])(?:{alternation})(?![{_WORD_CHARS}])")
 
 
 def mask_account_number(digits: str) -> str:
@@ -83,12 +98,8 @@ class Redactor:
             tokens |= {identity, quote(identity, safe=""), quote_plus(identity)}
         # Longest first so an encoded form containing a raw form is replaced whole.
         self._substrings = sorted(substrings, key=len, reverse=True)
-        alternation = "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True))
-        self._tokens = (
-            re.compile(f"(?<![{_WORD_CHARS}])(?:{alternation})(?![{_WORD_CHARS}])")
-            if tokens
-            else None
-        )
+        self._token_values = tokens
+        self._tokens = _token_pattern(tokens)
         self._mask_accounts = mask_account_numbers
 
     @classmethod
@@ -105,10 +116,17 @@ class Redactor:
         )
 
     def add_secret(self, value: str) -> None:
-        """Mask a value learned during a run, such as a sensitive output, from now on."""
+        """Mask a value learned during a run, such as a sensitive output, from now on.
+
+        Matched as a whole token, so a balance of 15.00 never eats into 115.00 or 05:18:15.004.
+        """
         _check_length(value)
-        forms = {value, quote(value, safe=""), quote_plus(value), json.dumps(value)[1:-1]}
-        self._substrings = sorted(set(self._substrings) | forms, key=len, reverse=True)
+        self._token_values = self._token_values | {value}
+        self._tokens = _token_pattern(self._token_values)
+
+    def free_text(self, value: str) -> str:
+        """Prose written about the screen, such as a model's rationale: amounts are masked too."""
+        return _AMOUNT_RE.sub(AMOUNT, self.text(value))
 
     def text(self, value: str) -> str:
         for form in self._substrings:
