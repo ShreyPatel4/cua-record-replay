@@ -884,3 +884,17 @@ def test_cookies_written_as_log_text_are_learned_and_scrubbed_everywhere(tmp_pat
     assert not leaks
     with zipfile.ZipFile(out) as archive:
         assert "set-cookie: [REDACTED]" in archive.read("trace.trace").decode()
+
+
+def test_the_approved_profile_wait_keeps_the_slow_recovery_reachable() -> None:
+    """The slow evidence run depends on these three numbers: s06 must give up before the injected
+    delay, and the retry budget must outlast it. Retuning either side silently breaks the demo."""
+    from cua.artifact.schema import Recoverable, WaitRetryRecovery
+    from mock_app.injections import DEFAULT_SLOW_MS
+
+    capability = load_capability(BALANCE_ARTIFACT)
+    wait = next(s for s in capability.steps if s.id == "s06").wait_for.timeout_ms
+    slow = next(d for d in capability.outcome_detectors if d.id == "od_slow_member_load").outcome
+    assert isinstance(slow, Recoverable)
+    assert isinstance(slow.recovery, WaitRetryRecovery)
+    assert wait < DEFAULT_SLOW_MS < wait + slow.recovery.max_total_ms
