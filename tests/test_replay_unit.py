@@ -275,8 +275,10 @@ def test_escalations_pass_through_one_hook_and_stop_as_hard_failures_without_an_
 
 
 def _refusal_request(tmp_path: Path, **changes: Any) -> ReplayRequest:
+    draft = load_capability(BALANCE_ARTIFACT).model_dump(mode="json")
+    draft["capability"].update(status="draft", approved_by=None, approved_at=None)
     fields: dict[str, Any] = {
-        "capability": load_capability(BALANCE_ARTIFACT),
+        "capability": Capability.model_validate(draft),
         "inputs": {"member_number": "10007"},
         "policy_file": POLICY_FILE,
         "evidence_root": tmp_path,
