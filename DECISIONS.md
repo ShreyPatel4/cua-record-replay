@@ -29,13 +29,13 @@ his behalf and confirmed it at the phase stop.
 | 18 | 2026-09-15 | 4 | Phase 4 escalation ends as `hard_failure` with the reason code kept, because there is no operator channel yet. Phase 5 rewires it to `escalated`, exit 3, with an intervention path, and replaces the committed `permission_denied` run. | Shrey | CLAUDE.md "Carried into phases 5 and 6" |
 | 19 | 2026-09-15 | 4 | New engine codes: `ACTION_FAILED`, `TARGET_CHANGED`, `CAPABILITY_DEPRECATED`. | Shrey | `src/cua/vocab.py` |
 | 20 | 2026-09-15 | 5 | On hand-back, resume re-runs the outcome detectors and re-verifies the interrupted step's checkpoint. It does not repeat the step's action, because the human may already have performed it. | Shrey | section 2.9 |
-| 22 | 2026-09-15 | 5 | Resume re-verifies and never repeats the action. A step with no checkpoint gets one detector pass and is recorded as not re-verified. | Delegated | `src/cua/replay/engine.py` `_reverify` |
+| 22 | 2026-09-15 | 5 | A step whose wait is a settle or a URL change has no checkpoint to re-verify, so a hand-back there gets one detector pass and is recorded as not re-verified. | Delegated | `src/cua/replay/engine.py` `_reverify` |
 | 23 | 2026-09-15 | 5 | A run pauses for a human at most 3 times, then ends escalated with the last request rather than ping-ponging. | Delegated | `MAX_HUMAN_PAUSES` |
 | 24 | 2026-09-15 | 5 | Control is the session file in the run's evidence directory. Every act and read goes through `file_control`, so a human holding the session locks automation out. | Delegated | `src/cua/session/state.py` |
 | 25 | 2026-09-15 | 5 | Human capture records one event per click, per field left, and per navigation. No keystroke logging, and credential values are added to the redactor before anything is written. | Delegated | `HUMAN_JS`, `OperatorChannel._write_action` |
 | 26 | 2026-09-15 | 5 | Stuck discovery runs write an intervention request but cannot hand over the live session. Resuming discovery is a REPORT.md cut. | Delegated | `src/cua/discover/run.py` |
 | 27 | 2026-09-15 | 5 | Committed evidence uses a demo operator id, never a real account name, because the id lands in the session file, the request, and the result. | Delegated | evidence/README.md |
-| 21 | 2026-09-15 | 6 | `open_subaccount` discovery needs a fresh API key. The phase 3 key expired on 2026-09-14. | Shrey, pending key | phase 6 |
+| 28 | 2026-09-15 | 6 | `open_subaccount` discovery needs a fresh API key. The phase 3 key expired on 2026-09-14. | Shrey, pending key | phase 6 |
 
 ## Still open
 
