@@ -280,7 +280,7 @@ def run_replay(
         if channel is not None:
             _quietly(lambda: channel.close(_status_of(result)))
         _quietly(lambda: surface.stop_trace(None))
-        surface.close()
+        _quietly(surface.close)
     problems = result.contract_problems(capability)
     if problems:
         evidence.event("replay", "contract_problems", problems=problems)

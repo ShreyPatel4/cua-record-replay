@@ -1323,3 +1323,39 @@ def test_a_run_whose_session_is_taken_with_no_pause_stops_as_operator_aborted(
     )
     assert result.observed
     assert "not automation" in result.observed
+
+
+def test_an_operator_who_closes_the_browser_ends_the_run_instead_of_crashing_it(
+    tmp_path: Path,
+) -> None:
+    """A window is a human's to close. The run cannot act on a session that is gone, so it ends
+    escalated with the request that asked for them, not with a surface traceback."""
+
+    class ClosesTheWindow(FakeOperator):
+        def __call__(self, ms: int) -> None:
+            self.clock.sleep(ms)
+            if not self.store.path.exists():
+                return
+            state = self.store.read()
+            at = NOW + timedelta(seconds=self.clock.t)
+            if state.phase == "paused_for_human":
+                self.takes += 1
+                self.store.transition("take_control", "operator", operator_id=self.who, now=at)
+                return
+            if state.phase == "human_active":
+                raise RuntimeError("Target page, context or browser has been closed")
+
+    result, _, events, store = _with_operator(
+        tmp_path,
+        _capability([DOWN]),
+        ready_at=None,
+        operator=lambda store, clock, _s: ClosesTheWindow(store, clock),
+    )
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    assert result.message
+    assert "browser session was closed" in result.message
+    assert [e["event"] for e in events if e["event"] == "session_gone"]
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.operator_id) == ("aborted", "teller-9")
+    assert store.read().phase == "finished", "no session is left claiming a live browser"

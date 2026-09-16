@@ -42,8 +42,11 @@ at the keyboard. Two terminals, about a minute.
 5. Terminal 3: `uv run cua ops list --evidence-root evidence/_scratch` shows the run as
    `paused_for_human`, then run the take-control command it printed. The browser window comes to
    the front and is yours; replay will not touch it.
-6. In the browser, fix what the automation could not: reload the member page (the injection was
-   armed once, so the reload succeeds). You are looking at the member profile again.
+6. In the browser, fix what the automation could not. The injection was armed once and is already
+   spent, so look the member up again: type the member number into Member number and click Find.
+   You should be looking at the member profile. A plain reload is not enough, because reloading
+   the frameset lands you back on the empty lookup screen, and the hand-back will then fail
+   re-verification and pause the run again, which is the state machine doing its job.
 7. Terminal 3: `uv run cua ops hand-back <run_id> --evidence-root evidence/_scratch --note "reloaded the member page after the 500"`
 8. Replay re-runs the outcome detectors, re-verifies `cp_member_profile`, and carries on. It does
    not click Find again: you may already have done the step by hand. The run finishes

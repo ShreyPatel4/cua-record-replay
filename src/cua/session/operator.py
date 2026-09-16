@@ -110,6 +110,7 @@ class OperatorChannel:
         self._actions = 0
         self._holding = False
         self._capturing = False
+        self._lost = ""
         self._sink: TextIO | None = None
 
     # ---- the hook ----------------------------------------------------------------------------
@@ -120,6 +121,8 @@ class OperatorChannel:
         self._wait_for_operator(request)
         state = self.store.read()
         taken_at, operator = _taker(state, opened_at)
+        if self._lost:
+            return self._session_gone(stop, request, operator, taken_at)
         if state.phase != "resuming":
             return self._ended(stop, request, state, operator=operator, taken_at=taken_at)
         assert taken_at is not None
@@ -253,6 +256,16 @@ class OperatorChannel:
                 self._holding = True
                 deadline = state.updated_at + timedelta(seconds=self._wait_s)
                 self._to_front()
+            try:
+                self._sleep(self._poll_ms)
+            except Exception as exc:
+                # The window is a human's to close, and a closed window is an ending, not a
+                # traceback. Nothing can act on this session again, so the run stops here.
+                self._lost = type(exc).__name__
+                self._evidence.event("operator", "session_gone", error=self._lost)
+                self._end_capture()
+                self._quietly("finish", "automation", note="the browser session was closed")
+                return
             if self._now() >= deadline:
                 self._end_capture()
                 waited = (
@@ -268,7 +281,6 @@ class OperatorChannel:
                     detail=waited,
                 )
                 return
-            self._sleep(self._poll_ms)
 
     # ---- capture -----------------------------------------------------------------------------
 
@@ -383,6 +395,39 @@ class OperatorChannel:
             intervention=record(False),
             intervention_path=str(Path(self._evidence.dir) / "intervention.json"),
             confirm=confirm,
+        )
+
+    def _session_gone(
+        self,
+        stop: RunStopped,
+        request: InterventionRequest,
+        operator: str | None,
+        taken_at: datetime | None,
+    ) -> RunStopped:
+        """The browser went away while the run was paused. Whoever closed it ended the run."""
+        written = HumanIntervention(
+            type="human",
+            step_id=request.step_id,
+            intervention_id=request.intervention_id,
+            reason_code=request.reason_code,
+            outcome="aborted" if taken_at is not None else "expired",
+            operator_id=operator if taken_at is not None else None,
+            operator_note="the browser session was closed",
+            human_action_count=self._actions,
+            reverified=False,
+            taken_at=taken_at,
+        )
+        self._evidence.event("operator", "intervention_closed", **written.model_dump(mode="json"))
+        return RunStopped(
+            stop.code,
+            f"{stop.message} A human was asked for ({request.reason_code}) and the browser "
+            f"session was closed before the run could carry on ({self._lost}).",
+            expected=stop.expected,
+            observed=stop.observed,
+            status="escalated",
+            intervention_path=str(Path(self._evidence.dir) / "intervention.json"),
+            step_id=request.step_id,
+            recoveries=(written,),
         )
 
     def _ended(

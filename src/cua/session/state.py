@@ -55,6 +55,7 @@ TRANSITIONS: dict[tuple[Phase, Event], Phase] = {
     # the hand-back. Automation still has to record that nothing holds the session any more.
     ("paused_for_human", "finish"): "finished",
     ("resuming", "finish"): "finished",
+    ("human_active", "finish"): "finished",
 }
 
 # Which actor may fire which event. The operator can never resume automation without a hand-back.

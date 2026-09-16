@@ -516,6 +516,18 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
 - The final leak sweep covers every tracked file plus every zip member; a test pins that the
   operator id never survives into an artifact or an evidence file.
 
+### Found while demonstrating the handoff
+
+- Closing the browser window during a pause killed the run with a Playwright TargetClosedError and
+  wrote `result.json` with status `crashed`. A window is a human's to close, so that is an ending:
+  the channel notices the surface is gone, finishes the session file, and returns `escalated` with
+  the request that asked for a human. `("human_active", "finish")` is now a legal transition, and
+  `surface.close()` in the cleanup path is wrapped like the rest.
+- Reloading the top frameset lands on the empty member lookup, not the member profile, so a
+  hand-back after a plain reload fails re-verification and pauses again. That is the state machine
+  behaving, and it is what the walkthrough in `evidence/README.md` now says to do instead: look the
+  member up again before handing back.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in

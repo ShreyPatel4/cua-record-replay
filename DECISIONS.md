@@ -54,6 +54,7 @@ his behalf and confirmed it at the phase stop.
 | 44 | 2026-09-16 | 6 | Every committed evidence run was regenerated after these changes, so no run predates the code or the policy that produced it. | Delegated | evidence/README.md |
 
 | 45 | 2026-09-16 | 6 | Published as the public repo `ShreyPatel4/cua-record-replay` over SSH, after checking that `.env` and interface.ai's brief are gitignored and absent from the pushed tree. | Shrey | https://github.com/ShreyPatel4/cua-record-replay |
+| 46 | 2026-09-16 | 6 | A browser closed during a pause ends the run as `escalated`, not `crashed`. Found by closing the window during a live demo. | Shrey | phase 6, `src/cua/session/operator.py` |
 
 ## Still open
 
