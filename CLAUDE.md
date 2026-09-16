@@ -527,6 +527,11 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
   hand-back after a plain reload fails re-verification and pauses again. That is the state machine
   behaving, and it is what the walkthrough in `evidence/README.md` now says to do instead: look the
   member up again before handing back.
+- A rebuilt frameset leaves its old child frames listed on the page, carrying the URL, the text and
+  the status of a screen that is gone. `_frame` resolved a path to one of those, so after the
+  operator fixed the app by hand the run still saw the 500 it had paused on and refused to resume.
+  Frame paths now skip detached frames and take the newest match, and a detached frame's remembered
+  status is dropped. This was a real bug on every read through a frame path, not only on resume.
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 

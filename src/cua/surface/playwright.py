@@ -231,6 +231,7 @@ class PlaywrightSurface:
         self.page.on("response", self._on_response)
         self.page.on("dialog", self._on_dialog)
         self.page.on("framenavigated", self._on_frame_navigated)
+        self.page.on("framedetached", self._on_frame_detached)
 
     def close(self) -> None:
         self._context.close()
@@ -343,6 +344,10 @@ class PlaywrightSurface:
         request = response.request
         if request.resource_type == "document" and request not in self._answered_by_guard:
             self._status[response.frame] = response.status
+
+    def _on_frame_detached(self, frame: Frame) -> None:
+        """A frame that is gone remembers nothing: its status belongs to a screen that is over."""
+        self._status.pop(frame, None)
 
     def _on_frame_navigated(self, frame: Frame) -> None:
         sink = self._human_sink
@@ -506,9 +511,16 @@ class PlaywrightSurface:
         return tuple(reversed(path))
 
     def _frame(self, frame_path: Sequence[str]) -> Frame:
+        """Resolve a frame path against the live page.
+
+        Detached frames are skipped. A rebuilt frameset leaves its old children listed for a
+        while, and they keep the URL and the status of the page that is gone, so resolving to one
+        reads a screen that no longer exists. Found when a human rebuilt a frameset by hand
+        during a handoff: the run still saw the error page it had paused on.
+        """
         frame = self.page.main_frame
         for part in frame_path:
-            children = frame.child_frames
+            children = [child for child in frame.child_frames if not child.is_detached()]
             if part.startswith("#"):
                 index = int(part[1:])
                 if index >= len(children):
@@ -518,7 +530,7 @@ class PlaywrightSurface:
             named = [child for child in children if child.name == part]
             if not named:
                 raise FrameNotFound(f"no frame {'/'.join(frame_path)}")
-            frame = named[0]
+            frame = named[-1]
         return frame
 
     def _run(self, frame: Frame, arg: dict[str, Any]) -> Any:

@@ -518,6 +518,37 @@ def test_reads_refuse_while_a_human_holds_control(
             read()
 
 
+def test_a_rebuilt_frameset_is_read_from_the_live_frame_not_the_dead_one(
+    surface: PlaywrightSurface,
+    hand_off: HandOff,
+    coreledger: RunningMockApp,
+    mock_settings: MockSettings,
+) -> None:
+    """A human rebuilding a frameset by hand leaves the old child frames listed for a while. They
+    keep the URL, the text and the status of a screen that is gone, so reading through the frame
+    path has to skip them. Found during a live handoff: after the operator fixed the app, the run
+    still saw the 500 it had paused on and refused to resume."""
+    base = coreledger.base_url
+    _sign_in(surface, base, mock_settings)
+    page = surface.page
+    page.goto(f"{base}/")
+    main = next(f for f in page.frames if f.name == "main")
+    main.goto(f"{base}/members/10007?inject=app_error")
+    assert surface.frame_status(["main"]) == 500
+    assert "Internal Server Error" in surface.frame_text(["main"])
+
+    # What a person does when the app breaks: rebuild the screen and look the member up again.
+    hand_off.holder = "human"
+    page.goto(f"{base}/")
+    next(f for f in page.frames if f.name == "main").goto(f"{base}/members/10007")
+    hand_off.holder = "automation"
+
+    assert surface.frame_status(["main"]) == 200
+    assert "Member profile" in surface.frame_text(["main"])
+    assert "Internal Server Error" not in surface.frame_text(["main"])
+    assert surface.frame_url(["main"]).endswith("/members/10007")
+
+
 def test_desktop_surface_is_a_documented_stub() -> None:
     desktop = DesktopSurface()
     assert "UI Automation" in (DesktopSurface.__doc__ or "")
