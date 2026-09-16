@@ -527,6 +527,13 @@ def test_the_cli_exits_three_when_a_pause_expires_with_no_operator(
     assert (state["phase"], state["controller"]) == ("finished", "nobody")
     assert [r["outcome"] for r in body["recoveries"]] == ["expired"]
     assert (request.parent / "trace.zip").is_file()
+    # The screen it stopped on, captured at the pause while automation still held the session.
+    # After the pause ends the session is over, so no step capture can follow it.
+    assert written["screenshot_path"].startswith("intervention_")
+    assert written["a11y_snapshot_path"].startswith("a11y_intervention_")
+    log = (request.parent / "run.jsonl").read_text()
+    assert "capture_failed" not in log, "a real capture failure must stay visible"
+    assert "capture_skipped" in log
 
 
 def test_an_output_that_does_not_parse_fails_without_leaking_the_balance(

@@ -1,6 +1,6 @@
 {
   "intervention_id": "iv_01",
-  "run_id": "replay_20260916T051811Z_7d2d5f",
+  "run_id": "replay_20260916T052503Z_5abb6a",
   "kind": "replay",
   "capability_id": "coreledger.member.read_savings_balance",
   "goal": null,
@@ -15,7 +15,7 @@
     "Replay will not repeat the step it paused on. If that step never happened, do it by hand before you hand back; replay only re-checks the screen.",
     "If the app is broken rather than blocked, abort and the run ends as escalated."
   ],
-  "resume_command": "uv run cua ops take-control replay_20260916T051811Z_7d2d5f --evidence-root evidence",
-  "requested_at": "2026-09-16T05:18:14.048694Z",
-  "expires_at": "2026-09-16T05:18:34.048694Z"
+  "resume_command": "uv run cua ops take-control replay_20260916T052503Z_5abb6a --evidence-root evidence",
+  "requested_at": "2026-09-16T05:25:06.015314Z",
+  "expires_at": "2026-09-16T05:25:26.015314Z"
 }

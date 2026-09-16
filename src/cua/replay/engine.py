@@ -1164,6 +1164,11 @@ class ReplayEngine:
         try:
             snapshot = self._surface.snapshot()
             png = self._surface.screenshot()
+        except NotInControl:
+            # The session ended in a human's hands, so there is nothing left to photograph here.
+            # The screen the run stopped on was captured at the pause, as intervention_NN.png.
+            self._log("capture_skipped", step=self._index, reason="the session is not ours")
+            return
         except Exception as exc:
             self._log("capture_failed", step=self._index, error=type(exc).__name__)
             return

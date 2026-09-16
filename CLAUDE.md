@@ -461,6 +461,12 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
   does not act, so the text tells the operator instead. Revisit only if the demo asks for it.
 - For REPORT.md: `take-control` does not bring the window forward itself. The paused run does,
   within one poll, because only the run's process owns the browser.
+- An escalated run's stopping screen is `intervention_NN.png` and `a11y_intervention_NN.json`,
+  captured at the pause. After the pause the session is finished and belongs to nobody, so the
+  step capture is skipped rather than forced: the control check is the safety story and it stays
+  strict. `run.jsonl` logs `capture_skipped`, which is not the same event as `capture_failed`.
+- `--escalation-timeout` is inert under `--repeat`: a stability batch is unattended by
+  definition, so no operator channel is attached to its runs.
 
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 

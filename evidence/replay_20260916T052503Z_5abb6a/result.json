@@ -3,9 +3,9 @@
   "capability_id": "coreledger.member.read_savings_balance",
   "capability_version": "1.1.0",
   "tenant": null,
-  "run_id": "replay_20260916T051811Z_7d2d5f",
-  "started_at": "2026-09-16T05:18:11.718746Z",
-  "duration_ms": 22372,
+  "run_id": "replay_20260916T052503Z_5abb6a",
+  "started_at": "2026-09-16T05:25:03.792407Z",
+  "duration_ms": 22278,
   "inputs": {
     "member_number": "*0013"
   },
@@ -24,7 +24,7 @@
       "resolved_strategy": null,
       "passed": true,
       "attempts": 1,
-      "duration_ms": 254
+      "duration_ms": 233
     },
     {
       "step_id": "s02",
@@ -33,7 +33,7 @@
       "resolved_strategy": "role_name",
       "passed": true,
       "attempts": 1,
-      "duration_ms": 371
+      "duration_ms": 359
     },
     {
       "step_id": "s03",
@@ -42,7 +42,7 @@
       "resolved_strategy": "role_name",
       "passed": true,
       "attempts": 1,
-      "duration_ms": 401
+      "duration_ms": 391
     },
     {
       "step_id": "s04",
@@ -51,7 +51,7 @@
       "resolved_strategy": "role_name",
       "passed": true,
       "attempts": 1,
-      "duration_ms": 224
+      "duration_ms": 221
     },
     {
       "step_id": "s05",
@@ -60,7 +60,7 @@
       "resolved_strategy": "label_text",
       "passed": true,
       "attempts": 1,
-      "duration_ms": 352
+      "duration_ms": 349
     },
     {
       "step_id": "s06",
@@ -69,7 +69,7 @@
       "resolved_strategy": "text_exact",
       "passed": false,
       "attempts": 1,
-      "duration_ms": 20403
+      "duration_ms": 20385
     }
   ],
   "recoveries": [
@@ -88,6 +88,6 @@
     }
   ],
   "warnings": [],
-  "evidence_dir": "evidence/replay_20260916T051811Z_7d2d5f",
-  "intervention_path": "evidence/replay_20260916T051811Z_7d2d5f/intervention.json"
+  "evidence_dir": "evidence/replay_20260916T052503Z_5abb6a",
+  "intervention_path": "evidence/replay_20260916T052503Z_5abb6a/intervention.json"
 }

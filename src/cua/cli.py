@@ -237,7 +237,8 @@ def replay(
         typer.Option(
             min=0,
             help="Seconds a paused run waits for an operator. 0 attaches no operator channel, so "
-            "an escalation ends the run as a hard failure.",
+            "an escalation ends the run as a hard failure. Ignored with --repeat: a stability "
+            "batch is unattended by definition.",
         ),
     ] = 300.0,
     evidence_root: Annotated[Path, typer.Option(help="Where run directories go.")] = Path(
