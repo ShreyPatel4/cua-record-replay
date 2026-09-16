@@ -5,6 +5,7 @@ Rungs match through one script per frame (locator.js), shared by the recorder an
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -65,6 +66,7 @@ from cua.surface.base import (
     TypeText,
 )
 from cua.surface.snapshot import ClickTarget, merge_click_targets, parse_snapshot
+from cua.vocab import SENSITIVE_FIELD_RE
 
 LOCATOR_JS = files("cua.surface").joinpath("locator.js").read_text(encoding="utf-8")
 # Installed in every frame before its scripts run: the time of the last DOM mutation, for settle.
@@ -127,7 +129,7 @@ HUMAN_JS = """(() => {
     const secret = (el, name) => {
       const type = (el.getAttribute && el.getAttribute("type") || "").toLowerCase();
       const attrs = [name, el.name || "", el.id || ""].join(" ");
-      return type === "password" || /pass|pin|secret|token/i.test(attrs);
+      return type === "password" || new RegExp(__CUA_SECRET_FIELD__, "i").test(attrs);
     };
     const report = (kind, el, value) => {
       if (!window.__cuaHuman || !el) return;
@@ -154,7 +156,7 @@ HUMAN_JS = """(() => {
     }, true);
   };
   install(document);
-})();"""
+})();""".replace("__CUA_SECRET_FIELD__", json.dumps(SENSITIVE_FIELD_RE.pattern.replace("(?i)", "")))
 POLL_MS = 50
 # An act that can start a navigation stays open until no request has started for this long, capped,
 # so the navigation is routed and judged inside that act. Chromium sends a link's request after
@@ -341,11 +343,6 @@ class PlaywrightSurface:
         request = response.request
         if request.resource_type == "document" and request not in self._answered_by_guard:
             self._status[response.frame] = response.status
-
-    def _report_human_navigation(self, frame: Frame) -> None:
-        sink = self._human_sink
-        if sink is not None:
-            sink(HumanEvent(kind="navigate", frame_url=frame.url))
 
     def _on_frame_navigated(self, frame: Frame) -> None:
         sink = self._human_sink

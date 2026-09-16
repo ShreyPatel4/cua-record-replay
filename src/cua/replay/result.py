@@ -217,8 +217,10 @@ class ReplayResult(ResultModel):
             raise ValueError("step_reached may be null only for a pre-run failure code")
         if self.status == "success" and self.recoveries:
             raise ValueError("a run with recoveries is recovered_then_success, not success")
+        # A hand-back counts: control came back and the run carried on. reverified says the step
+        # had a checkpoint that passed, and a settle step has none to check.
         if self.status == "recovered_then_success" and not any(
-            r.succeeded if isinstance(r, AutomaticRecovery) else r.reverified
+            r.succeeded if isinstance(r, AutomaticRecovery) else r.outcome == "handed_back"
             for r in self.recoveries
         ):
             raise ValueError("recovered_then_success requires at least one successful recovery")

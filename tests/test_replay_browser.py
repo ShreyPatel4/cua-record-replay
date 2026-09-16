@@ -568,7 +568,7 @@ def test_a_human_takes_the_live_session_fixes_the_app_and_hands_it_back(
     inject("app_error", on="detail", times=1)
     holder: dict[str, Any] = {}
 
-    def open_escalation(evidence: EvidenceWriter, surface: Any) -> OperatorChannel:
+    def open_escalation(evidence: EvidenceWriter, surface: Any, redactor: Any) -> OperatorChannel:
         store = StateStore(evidence.dir / "session_state.json")
         holder["store"] = store
 
@@ -596,7 +596,7 @@ def test_a_human_takes_the_live_session_fixes_the_app_and_hands_it_back(
             capability_id=replayer.capability.capability.id,
             evidence=evidence,
             surface=surface,
-            redactor=evidence.redactor,
+            redactor=redactor,
             resume_command=lambda run: f"uv run cua ops take-control {run}",
             wait_s=20.0,
             sleep=operator,
@@ -633,3 +633,65 @@ def test_a_human_takes_the_live_session_fixes_the_app_and_hands_it_back(
     steps = [(s["step_id"], s["passed"]) for s in result.model_dump(mode="json")["steps"]]
     assert steps.count(("s06", True)) == 1, "the step the human finished is not run twice"
     _assert_no_secrets(result, mock_settings)
+
+
+def test_a_password_typed_by_hand_reaches_neither_the_action_log_nor_the_trace(
+    replayer: Replayer, inject: Injector, mock_settings: MockSettings, coreledger: RunningMockApp
+) -> None:
+    """The dangerous half of a handoff: the human types a real credential into the live browser.
+    The capture sees it raw, so it has to learn it and mask it everywhere, trace included."""
+    inject("app_error", on="detail")
+    password = mock_settings.operator_password
+
+    def open_escalation(evidence: EvidenceWriter, surface: Any, redactor: Any) -> OperatorChannel:
+        store = StateStore(evidence.dir / "session_state.json")
+
+        def operator(ms: int) -> None:
+            surface.wait(ms)
+            if not store.path.exists():
+                return
+            phase = store.read().phase
+            if phase == "paused_for_human":
+                store.transition("take_control", "operator", operator_id="teller-9")
+            elif phase == "human_active":
+                page = surface.page
+                page.goto(f"{coreledger.base_url}/login")
+                frame = page.frames[-1]
+                frame.fill("input[type=password]", password)
+                frame.evaluate("document.querySelector('input[type=password]').blur()")
+                store.transition(
+                    "abort", "operator", operator_id="teller-9", note="the app is down, ending it"
+                )
+
+        return OperatorChannel(
+            run_id=evidence.run_id,
+            capability_id=replayer.capability.capability.id,
+            evidence=evidence,
+            surface=surface,
+            redactor=redactor,
+            resume_command=lambda run: f"uv run cua ops take-control {run}",
+            wait_s=20.0,
+            sleep=operator,
+            announce=lambda _text: None,
+        )
+
+    result = replayer.run("10007", open_escalation=open_escalation)
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    human = result.recoveries[-1]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.operator_id) == ("aborted", "teller-9")
+
+    run_dir = Path(result.evidence_dir)
+    actions = [
+        json.loads(line)
+        for line in (run_dir / "human_actions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    typed = [a for a in actions if a["value"] is not None]
+    assert typed, "the typed value was captured, and then masked"
+    assert all(a["value"] == REDACTED for a in typed)
+    assert (run_dir / "trace.zip").is_file()
+    assert not find_leaks(run_dir.rglob("*"), {"operator password": password})
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    flagged = {f["path"] for f in manifest["files"] if f["sensitive"]}
+    assert {"human_actions.jsonl", "trace.zip", "session_state.json"} <= flagged

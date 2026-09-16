@@ -10,17 +10,27 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from cua.evidence.writer import EvidenceWriter
-from cua.policy.redact import Redactor
+from cua.policy.redact import REDACTED, Redactor
 from cua.replay.engine import Handback, RunStopped
 from cua.replay.result import HumanIntervention
 from cua.session.intervention import InterventionRequest, ReasonCode
-from cua.session.state import Event, SessionState, StateStore
+from cua.session.state import (
+    Actor,
+    Event,
+    IllegalTransition,
+    NotInControl,
+    SessionState,
+    StaleState,
+    StateStore,
+)
 from cua.surface.base import HumanEvent, Surface
+from cua.vocab import SENSITIVE_FIELD_RE
 
 # How often the paused run looks at the state file: fast enough that an operator never waits on us.
 POLL_MS = 250
@@ -29,6 +39,8 @@ DEFAULT_WAIT_S = 300.0
 SUGGESTIONS: dict[ReasonCode, tuple[str, ...]] = {
     "HARD_FAILURE_ESCALATE": (
         "Read the screen and clear whatever is blocking it, then hand back.",
+        "Replay will not repeat the step it paused on. If that step never happened, do it by "
+        "hand before you hand back; replay only re-checks the screen.",
         "If the app is broken rather than blocked, abort and the run ends as escalated.",
     ),
     "IRREVERSIBLE_NEEDS_HUMAN": (
@@ -37,6 +49,8 @@ SUGGESTIONS: dict[ReasonCode, tuple[str, ...]] = {
     ),
     "RECOVERY_EXHAUSTED": (
         "The automatic recovery ran out of attempts. Put the app back on the expected screen.",
+        "Replay re-checks that screen on hand-back; it does not repeat the step, so finish it "
+        "by hand if it never completed.",
     ),
     "POST_HANDOFF_CHECKPOINT_FAILED": (
         "The screen still does not match what the step expects. Read the note from last time.",
@@ -94,27 +108,39 @@ class OperatorChannel:
         self.store = StateStore(evidence.dir / "session_state.json")
         self._pauses = 0
         self._actions = 0
+        self._holding = False
         self._sink: TextIO | None = None
 
     # ---- the hook ----------------------------------------------------------------------------
 
     def __call__(self, stop: RunStopped, reason: ReasonCode) -> RunStopped | Handback:
+        opened_at = self._now()
         request = self._raise(stop, reason)
         self._wait_for_operator(request)
         state = self.store.read()
-        taken_at, operator = _taker(state)
+        taken_at, operator = _taker(state, opened_at)
         if state.phase != "resuming":
-            outcome = "aborted" if taken_at is not None else "expired"
-            return self._ended(stop, request, outcome, operator=operator, taken_at=taken_at)
+            return self._ended(stop, request, state, operator=operator, taken_at=taken_at)
         assert taken_at is not None
         assert operator is not None
         return self._handback(request, reason, taken_at, operator)
 
     def close(self, status: str) -> None:
         """Called once the run is over, so the session file does not claim a live session."""
+        self._end_capture()
         if not self.store.path.exists() or self.store.read().phase == "finished":
             return
-        self.store.transition("finish", "automation", note=f"run finished as {status}")
+        self._quietly("finish", "automation", note=f"run finished as {status}")
+
+    def _quietly(self, event: Event, actor: Actor, **fields: Any) -> None:
+        """A transition that must not fail the run. An operator can abort at any moment, and an
+        aborted session is already over: recording that fact again is not worth a crash."""
+        try:
+            self.store.transition(event, actor, **fields)
+        except (IllegalTransition, NotInControl, StaleState, OSError) as exc:
+            self._evidence.event(
+                "operator", "transition_skipped", skipped=event, reason=type(exc).__name__
+            )
 
     # ---- pausing -----------------------------------------------------------------------------
 
@@ -141,8 +167,7 @@ class OperatorChannel:
         )
         data = request.model_dump(mode="json")
         self._evidence.write_json("intervention.json", data)
-        with (self._evidence.dir / "interventions.jsonl").open("a", encoding="utf-8") as log:
-            log.write(json.dumps(data, ensure_ascii=False) + "\n")
+        self._evidence.append_json("interventions.jsonl", data)
         self._pause_session(request)
         self._evidence.event(
             "replay",
@@ -159,10 +184,18 @@ class OperatorChannel:
         brief's resuming to paused_for_human arrow, and carries the new intervention."""
         if not self.store.path.exists():
             self.store.create(SessionState.start(self._run_id, "replay", owner_pid=os.getpid()))
-        resuming = self.store.read().phase == "resuming"
-        event: Event = "reverify_failed" if resuming else "stuck_detected"
-        self.store.transition(
-            event, "automation", intervention_id=request.intervention_id, note=request.reason_text
+            # The history carries operator notes, which are free text an operator wrote in a
+            # hurry. Redaction masks what it knows; the flag covers what it cannot know.
+            self._evidence.flag_sensitive("session_state.json")
+            self._evidence.flag_sensitive("session_state.json.lock")
+        current = self.store.read()
+        event: Event = "reverify_failed" if current.phase == "resuming" else "stuck_detected"
+        self._quietly(
+            event,
+            "automation",
+            expected_version=current.version,
+            intervention_id=request.intervention_id,
+            note=request.reason_text,
         )
 
     def _capture(self, seq: int) -> tuple[str, str, str]:
@@ -199,19 +232,39 @@ class OperatorChannel:
     # ---- waiting -----------------------------------------------------------------------------
 
     def _wait_for_operator(self, request: InterventionRequest) -> None:
-        """Poll the state file until somebody hands back, aborts, or the request expires."""
+        """Poll the state file until somebody hands back, aborts, or the wait runs out.
+
+        Taking control restarts the clock: an operator who takes the session at the last second
+        gets the whole window to work in, and one who then walks away still ends the run instead
+        of holding the browser forever.
+        """
+        deadline = request.expires_at
+        # The window is live and clickable from the moment the run pauses, before anyone takes
+        # the session formally. Capture it from then, or what is typed in between is neither
+        # recorded nor learned by the redactor.
+        self._begin_capture()
         while True:
             state = self.store.read()
-            if state.phase == "human_active":
-                self._begin_capture()
-            elif state.phase in ("resuming", "finished"):
+            if state.phase in ("resuming", "finished"):
                 self._end_capture()
                 return
-            elif self._now() >= request.expires_at:
+            if state.phase == "human_active" and not self._holding:
+                self._holding = True
+                deadline = state.updated_at + timedelta(seconds=self._wait_s)
+                self._to_front()
+            if self._now() >= deadline:
                 self._end_capture()
-                self.store.transition("expire", "system", note="nobody took the session")
+                waited = (
+                    "nobody took the session"
+                    if state.phase == "paused_for_human"
+                    else (f"{state.operator_id} took the session and did not hand it back")
+                )
+                self._quietly("expire", "system", expected_version=state.version, note=waited)
                 self._evidence.event(
-                    "replay", "intervention_expired", intervention_id=request.intervention_id
+                    "replay",
+                    "intervention_expired",
+                    intervention_id=request.intervention_id,
+                    detail=waited,
                 )
                 return
             self._sleep(self._poll_ms)
@@ -224,16 +277,30 @@ class OperatorChannel:
         self._sink = (self._evidence.dir / "human_actions.jsonl").open("a", encoding="utf-8")
         self._evidence.flag_sensitive("human_actions.jsonl")
         try:
-            self._surface.bring_to_front()
             self._surface.start_human_capture(self._write_action)
         except Exception as exc:  # capture is evidence, not control: never fail the handoff
             self._evidence.event("operator", "capture_failed", error=type(exc).__name__)
+            self._sink.close()
+            self._sink = None
+
+    def _to_front(self) -> None:
+        """The operator has taken the session; put the window where they can see it."""
+        try:
+            self._surface.bring_to_front()
+        except Exception as exc:
+            self._evidence.event("operator", "bring_to_front_failed", error=type(exc).__name__)
 
     def _write_action(self, event: HumanEvent) -> None:
         """Redact before writing. A human types real credentials, and this file is committed."""
         if event.value and event.credential_field:
-            self._redactor.add_credential(event.value)
+            with suppress(ValueError):  # too short to redact safely; it is masked below anyway
+                self._redactor.add_credential(event.value)
         redact = self._redactor.free_text
+        if self._sink is None:
+            return
+        credential = event.credential_field or (
+            event.name is not None and bool(SENSITIVE_FIELD_RE.search(event.name))
+        )
         record = {
             "at": self._now().isoformat(timespec="milliseconds"),
             "event": event.kind,
@@ -241,12 +308,13 @@ class OperatorChannel:
             "target_role": event.role,
             "target_name": redact(event.name) if event.name else None,
             "target_text": redact(event.text)[:80] if event.text else None,
-            "value": redact(event.value) if event.value else None,
+            "value": REDACTED
+            if (credential and event.value)
+            else redact(event.value or "") or None,
         }
         self._actions += 1
-        if self._sink is not None:
-            self._sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self._sink.flush()
+        self._sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._sink.flush()
 
     def _end_capture(self) -> None:
         if self._sink is None:
@@ -286,7 +354,7 @@ class OperatorChannel:
             """The engine says whether the screen verified. Only a pass returns the session to
             running; a failure leaves it resuming, and the next pause carries the new request."""
             if ok:
-                self.store.transition("checkpoint_reverified", "automation")
+                self._quietly("checkpoint_reverified", "automation")
             written = record(reverified)
             self._evidence.event(
                 "operator", "handback_verified", ok=ok, **written.model_dump(mode="json")
@@ -311,30 +379,37 @@ class OperatorChannel:
         self,
         stop: RunStopped,
         request: InterventionRequest,
-        outcome: str,
+        state: SessionState,
         *,
         operator: str | None,
         taken_at: datetime | None,
     ) -> RunStopped:
-        """Nobody came, or the operator ended it: an escalated stop carrying the request."""
-        history = self.store.read().history
+        """Nobody came, or the operator ended it: an escalated stop carrying the request.
+
+        Which of the two it was comes from the transition that ended the pause, not from whether
+        anyone ever held this run: an earlier pause may have had an operator who is not to blame
+        for this one.
+        """
+        last = state.history[-1] if state.history else None
+        aborted = last is not None and last.event == "abort"
+        by = last.operator_id if aborted and last else None
         written = HumanIntervention(
             type="human",
             step_id=request.step_id,
             intervention_id=request.intervention_id,
             reason_code=request.reason_code,
-            outcome="aborted" if outcome == "aborted" else "expired",
-            operator_id=operator,
-            operator_note=self._redactor.text(_clean(history[-1].note)) if history else "",
+            outcome="aborted" if aborted else "expired",
+            operator_id=by or (operator if not aborted else None),
+            operator_note=self._redactor.text(_clean(last.note)) if aborted and last else "",
             human_action_count=self._actions,
             reverified=False,
             taken_at=taken_at,
         )
         self._evidence.event("operator", "intervention_closed", **written.model_dump(mode="json"))
         said = (
-            "an operator ended it"
-            if outcome == "aborted"
-            else f"no operator took it within {int(self._wait_s)} s"
+            f"{by or 'an operator'} ended it"
+            if aborted
+            else f"no operator finished it within {int(self._wait_s)} s"
         )
         return RunStopped(
             stop.code,
@@ -348,10 +423,13 @@ class OperatorChannel:
         )
 
 
-def _taker(state: SessionState) -> tuple[datetime | None, str | None]:
-    """When the human took this session and who they were, from the transitions themselves: a
-    fast operator can take and hand back between two polls."""
+def _taker(state: SessionState, since: datetime) -> tuple[datetime | None, str | None]:
+    """When a human took this session and who they were, from the transitions themselves: a fast
+    operator can take and hand back between two polls. Only this pause counts, so an operator who
+    answered an earlier one is not recorded against a pause they never saw."""
     for record in reversed(state.history):
+        if record.at < since:
+            break
         if record.event == "take_control":
             return (record.at, record.operator_id)
     return (None, None)

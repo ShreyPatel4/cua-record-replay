@@ -64,7 +64,7 @@ class EscalationChannel(Protocol):
     def close(self, status: str) -> None: ...
 
 
-OpenEscalation = Callable[[EvidenceWriter, ReplaySurface], EscalationChannel]
+OpenEscalation = Callable[[EvidenceWriter, ReplaySurface, Redactor], EscalationChannel]
 
 
 @dataclass(frozen=True)
@@ -229,7 +229,7 @@ def run_replay(
             request, policy, policy_problem, environ
         )
     except _Refused as refused:
-        result = ReplayResult(
+        refusal = ReplayResult(
             status="hard_failure",
             capability_id=base.capability.id,
             capability_version=base.capability.version,
@@ -244,11 +244,12 @@ def run_replay(
             observed=redactor.text(refused.observed),
             evidence_dir=str(evidence.dir),
         )
-        evidence.event("replay", "run_refused", code=refused.code, message=result.message)
-        return _conclude(result, base, evidence)
+        evidence.event("replay", "run_refused", code=refused.code, message=refusal.message)
+        return _conclude(refusal, base, evidence)
 
+    result: ReplayResult | None = None
     surface = open_surface(file_control(evidence.dir / "session_state.json"))
-    channel = open_escalation(evidence, surface) if open_escalation else None
+    channel = open_escalation(evidence, surface, redactor) if open_escalation else None
     try:
         gated = GatedSurface(
             surface, surface, PolicyGate(policy), confirm_irreversible=request.confirm_irreversible
@@ -269,19 +270,25 @@ def run_replay(
             clock=clock(surface) if clock else None,
             escalation=channel or escalation,
         ).run()
-        if channel is not None:
-            channel.close(result.status)
         _keep_or_discard_trace(surface, result, redactor, evidence)
     except BaseException as exc:
         _record_crash(evidence, redactor, exc)
         raise
     finally:
+        # The session file must never outlive the run: a crashed run that still says
+        # paused_for_human invites an operator to take a session nobody is listening to.
+        if channel is not None:
+            _quietly(lambda: channel.close(_status_of(result)))
         _quietly(lambda: surface.stop_trace(None))
         surface.close()
     problems = result.contract_problems(capability)
     if problems:
         evidence.event("replay", "contract_problems", problems=problems)
     return _conclude(result, capability, evidence)
+
+
+def _status_of(result: ReplayResult | None) -> str:
+    return result.status if result is not None else "crashed"
 
 
 def _quietly(action: Callable[[], object]) -> None:

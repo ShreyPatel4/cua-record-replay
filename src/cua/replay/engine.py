@@ -59,6 +59,7 @@ from cua.replay.result import (
     WeakTargetWarning,
 )
 from cua.session.intervention import ReasonCode
+from cua.session.state import NotInControl
 from cua.surface.base import (
     BLOCKING_EVENTS,
     Action,
@@ -287,6 +288,12 @@ class ReplayEngine:
             for index, step in enumerate(self._cap.steps, start=1):
                 self._step_with_handbacks(step, index)
             outputs = self._finish_with_handbacks()
+        except NotInControl as lost:
+            # An operator aborted the session under a running step. The browser is theirs now, so
+            # nothing is captured here; the run ends as the escalation it already was.
+            self._log("control_lost", detail=str(lost))
+            self._record_unfinished_step()
+            result = self._result(begin, stop=self._control_lost(lost))
         except RunStopped as stop:
             self._record_unfinished_step()
             self._capture(failed=True)
@@ -303,6 +310,17 @@ class ReplayEngine:
             warnings=len(result.warnings),
         )
         return result
+
+    def _control_lost(self, lost: NotInControl) -> RunStopped:
+        return RunStopped(
+            "OPERATOR_ABORTED",
+            f"a human took the session away from the run: {lost}",
+            expected="automation holding the session for the rest of the run",
+            observed=str(lost),
+            status="escalated" if self._intervention_path else "hard_failure",
+            intervention_path=self._intervention_path,
+            step_id=self._reached or "",
+        )
 
     def _result(
         self,
@@ -420,7 +438,7 @@ class ReplayEngine:
             detector = self._matching(step)
             if detector is not None:
                 self._handle(step, detector, opened)
-        except RunStopped:
+        except (RunStopped, _HandedBack):
             self._close(step, opened, succeeded=False)
             raise
         self._close(step, opened, succeeded=True)
@@ -597,9 +615,11 @@ class ReplayEngine:
     def _escalate(self, stop: RunStopped, reason: ReasonCode) -> RunStopped:
         """Ask for a human. Returns the stop that ends the run, or raises _HandedBack when an
         operator took the session and gave it back for the engine to re-verify."""
-        if self._reverifying:
+        if self._reverifying and reason != "IRREVERSIBLE_NEEDS_HUMAN":
             # A stop raised while re-verifying a hand-back belongs to that hand-back: the caller
-            # reports it as the post-handoff failure rather than as a fresh escalation.
+            # reports it as the post-handoff failure rather than as a fresh escalation. A step a
+            # recovery reached that replay will not perform still asks for a human in its own
+            # words, because what the operator has to do is different.
             return stop
         self._log("escalation_requested", code=stop.code, reason=reason, pauses=self._pauses)
         if self._pauses >= MAX_HUMAN_PAUSES:
@@ -845,7 +865,9 @@ class ReplayEngine:
                     pause = min(POLL_MS / 1000, deadline - now)
                 if pace:
                     self._clock.sleep(max(1, int(pause * 1000)))
-        except RunStopped:
+        except (RunStopped, _HandedBack):
+            # A hand-back unwinds past this too, and the recoveries it interrupted still belong
+            # in the result.
             self._close(step, opened, succeeded=False)
             raise
 

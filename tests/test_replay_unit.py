@@ -32,7 +32,7 @@ from cua.replay.result import AutomaticRecovery, HumanIntervention, ReplayResult
 from cua.replay.run import Control, ReplayRequest, ReplaySurface, run_replay
 from cua.session.intervention import ReasonCode
 from cua.session.operator import OperatorChannel
-from cua.session.state import StateStore
+from cua.session.state import SessionState, StateStore, file_control
 from cua.surface.base import A11ySnapshot, Action, ActResult, Element, HumanEvent, SurfaceEvent
 
 from support import ROOT, find_leaks
@@ -68,6 +68,8 @@ class ScriptedSurface:
         self.ready_at = ready_at
         self.text_reads = 0
         self.acts: list[str] = []
+        self.fronted = False
+        self.human_sink: Callable[[HumanEvent], None] | None = None
 
     def frame_text(self, frame_path: Sequence[str]) -> str:
         self.text_reads += 1
@@ -101,6 +103,15 @@ class ScriptedSurface:
 
     def stop_trace(self, path: Path | None) -> bool:
         return False
+
+    def bring_to_front(self) -> None:
+        self.fronted = True
+
+    def start_human_capture(self, sink: Callable[[HumanEvent], None]) -> None:
+        self.human_sink = sink
+
+    def stop_human_capture(self) -> None:
+        self.human_sink = None
 
     def snapshot(self) -> A11ySnapshot:
         return A11ySnapshot(nodes=[], frame_urls={"": URL})
@@ -928,6 +939,7 @@ class FakeOperator:
         self.who = who
         self.note = note
         self.takes = 0
+        self.polls = 0
 
     def __call__(self, ms: int) -> None:
         self.clock.sleep(ms)
@@ -1109,3 +1121,205 @@ def test_what_a_human_types_is_redacted_before_it_reaches_the_evidence(tmp_path:
     assert "[REDACTED]" in written
     assert '"event": "click"' in written
     assert not find_leaks(evidence.dir.rglob("*"), {"typed": "hunter2-operator-secret"})
+
+
+def test_a_hand_back_on_a_step_with_no_checkpoint_still_finishes_the_run(tmp_path: Path) -> None:
+    """A settle step has no checkpoint to re-verify, so the hand-back is recorded as not
+    re-verified. The run still carried on, which is what recovered_then_success means."""
+    data = _capability([DOWN]).model_dump(mode="json")
+    data["steps"][0]["wait_for"] = {"kind": "settle", "quiet_ms": 300, "timeout_ms": 3000}
+    data["success"]["checkpoint"] = "cp_profile"
+    capability = Capability.model_validate(data)
+
+    def script(store: StateStore, clock: FakeClock, surface: ScriptedSurface) -> FakeOperator:
+        def fix() -> None:
+            surface.ready_at = clock.t
+
+        return FakeOperator(store, clock, fix=fix)
+
+    result, _, _, _ = _with_operator(tmp_path, capability, ready_at=None, operator=script)
+    assert (result.status, result.exit_code) == ("recovered_then_success", 0)
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.reverified) == ("handed_back", False)
+
+
+def test_an_operator_who_takes_control_and_walks_away_expires_instead_of_hanging(
+    tmp_path: Path,
+) -> None:
+    """Taking the session restarts the clock, so an operator gets the full window. Walking away
+    with it still ends the run: a paused run must never hold the browser forever."""
+
+    class TakesAndLeaves(FakeOperator):
+        def __call__(self, ms: int) -> None:
+            self.polls += 1
+            assert self.polls < 500, "the run must not poll forever"
+            self.clock.sleep(ms)
+            if self.store.path.exists() and self.store.read().phase == "paused_for_human":
+                self.takes += 1
+                self.store.transition(
+                    "take_control",
+                    "operator",
+                    operator_id=self.who,
+                    now=NOW + timedelta(seconds=self.clock.t),
+                )
+
+    def script(store: StateStore, clock: FakeClock, _s: ScriptedSurface) -> FakeOperator:
+        return TakesAndLeaves(store, clock)
+
+    result, _, events, store = _with_operator(
+        tmp_path, _capability([DOWN]), ready_at=None, operator=script, wait_s=5.0
+    )
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    expired = [e for e in events if e["event"] == "intervention_expired"]
+    assert expired
+    assert "did not hand it back" in expired[0]["detail"]
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.operator_id) == ("expired", "teller-9")
+    assert store.read().phase == "finished"
+
+
+def test_an_abort_after_an_earlier_hand_back_is_not_blamed_on_the_first_operator(
+    tmp_path: Path,
+) -> None:
+    """Each pause is closed by its own transitions. The operator who answered pause one is not
+    recorded as the one who ended pause two."""
+
+    class OnceThenSilent(FakeOperator):
+        def __call__(self, ms: int) -> None:
+            self.clock.sleep(ms)
+            if not self.store.path.exists():
+                return
+            state = self.store.read()
+            at = NOW + timedelta(seconds=self.clock.t)
+            if state.phase == "paused_for_human" and self.takes == 0:
+                self.takes += 1
+                self.store.transition("take_control", "operator", operator_id=self.who, now=at)
+            elif state.phase == "human_active":
+                self.store.transition(
+                    "hand_back", "operator", operator_id=self.who, note="nothing to do", now=at
+                )
+
+    result, _, _, _ = _with_operator(
+        tmp_path,
+        _capability([DOWN]),
+        ready_at=None,
+        operator=lambda store, clock, _s: OnceThenSilent(store, clock),
+        wait_s=5.0,
+    )
+    assert result.status == "escalated"
+    first, second = result.recoveries[0], result.recoveries[1]
+    assert isinstance(first, HumanIntervention)
+    assert isinstance(second, HumanIntervention)
+    assert (first.outcome, first.operator_id) == ("handed_back", "teller-9")
+    assert (second.outcome, second.operator_id, second.operator_note) == ("expired", None, "")
+
+
+def test_an_abort_under_a_running_step_ends_the_run_instead_of_crashing(tmp_path: Path) -> None:
+    """Losing control mid-step is an escalation, not a traceback: the operator took the browser
+    and the run has nothing left to do."""
+
+    class TakesThenAborts(FakeOperator):
+        def __call__(self, ms: int) -> None:
+            self.clock.sleep(ms)
+            if not self.store.path.exists():
+                return
+            state = self.store.read()
+            at = NOW + timedelta(seconds=self.clock.t)
+            if state.phase == "paused_for_human":
+                self.store.transition("take_control", "operator", operator_id=self.who, now=at)
+            elif state.phase == "human_active":
+                # Hand back, then take the session away again while the run is re-verifying.
+                self.store.transition("hand_back", "operator", operator_id=self.who, now=at)
+                self.store.transition(
+                    "abort", "operator", operator_id=self.who, note="changed my mind", now=at
+                )
+
+    clock = FakeClock()
+    surface = ScriptedSurface(clock, None)
+    evidence = EvidenceWriter(tmp_path, "replay_probe", Redactor())
+    store = StateStore(evidence.dir / "session_state.json")
+    control = file_control(store.path)
+    driver = TakesThenAborts(store, clock)
+    channel = OperatorChannel(
+        run_id="replay_probe",
+        capability_id="coreledger.member.poll_probe",
+        evidence=evidence,
+        surface=cast(Any, surface),
+        redactor=Redactor(),
+        resume_command=lambda run: run,
+        wait_s=30.0,
+        sleep=driver,
+        now=lambda: NOW + timedelta(seconds=clock.t),
+        announce=lambda _text: None,
+    )
+
+    class Guarded(ScriptedSurface):
+        """Reads and acts go through the control hook, the way a real surface does."""
+
+        def frame_text(self, frame_path: Sequence[str]) -> str:
+            control()
+            return super().frame_text(frame_path)
+
+    guarded = Guarded(clock, None)
+    gate = PolicyGate(load_policy(POLICY_FILE, "coreledger-readonly"))
+    result = ReplayEngine(
+        _capability([DOWN]),
+        guarded,
+        GatedSurface(guarded, guarded, gate),
+        inputs={},
+        masked_inputs={},
+        secrets={},
+        redactor=Redactor(),
+        evidence=evidence,
+        run_id="replay_probe",
+        started_at=NOW,
+        clock=clock,
+        escalation=channel,
+    ).run()
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    assert result.intervention_path
+    assert store.read().phase == "finished"
+
+
+def test_a_run_whose_session_is_taken_with_no_pause_stops_as_operator_aborted(
+    tmp_path: Path,
+) -> None:
+    """Somebody aborts a session that was never paused. The next read raises NotInControl, and
+    that is an ending the caller can read, not a traceback."""
+    clock = FakeClock()
+    evidence = EvidenceWriter(tmp_path, "replay_probe", Redactor())
+    store = StateStore(evidence.dir / "session_state.json")
+    store.create(SessionState.start("replay_probe", "replay"))
+    store.transition("stuck_detected", "automation", intervention_id="iv_01")
+    store.transition("take_control", "operator", operator_id="teller-9")
+    control = file_control(store.path)
+
+    class Guarded(ScriptedSurface):
+        def frame_text(self, frame_path: Sequence[str]) -> str:
+            control()
+            return super().frame_text(frame_path)
+
+    guarded = Guarded(clock, 0.0)
+    gate = PolicyGate(load_policy(POLICY_FILE, "coreledger-readonly"))
+    result = ReplayEngine(
+        _capability([]),
+        guarded,
+        GatedSurface(guarded, guarded, gate),
+        inputs={},
+        masked_inputs={},
+        secrets={},
+        redactor=Redactor(),
+        evidence=evidence,
+        run_id="replay_probe",
+        started_at=NOW,
+        clock=clock,
+    ).run()
+    assert (result.status, result.outcome_code, result.exit_code) == (
+        "hard_failure",
+        "OPERATOR_ABORTED",
+        2,
+    )
+    assert result.observed
+    assert "not automation" in result.observed

@@ -3,6 +3,7 @@
 Exit codes: 0 success or business outcome, 1 usage or internal error, 2 hard failure, 3 escalated.
 """
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
 
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from cua.discover.run import ConfirmParams
     from cua.session.state import SessionState
 
+# Environment variables whose values are secrets worth redacting out of an operator's own words.
+_SECRETISH = re.compile(r"(?i)(pass|pin|secret|token|key|credential)")
 ARTIFACTS_DIR = Path("artifacts")
 POLICY_FILE = Path("policy/allowlist.yaml")
 
@@ -253,6 +256,7 @@ def replay(
     from playwright.sync_api import sync_playwright
 
     from cua.evidence.writer import EvidenceWriter
+    from cua.policy.redact import Redactor
     from cua.replay.run import (
         Control,
         ReplayRequest,
@@ -285,14 +289,14 @@ def replay(
                 return PlaywrightSurface.launch(chromium, control=control)
 
             def open_escalation(
-                evidence: "EvidenceWriter", surface: "ReplaySurface"
+                evidence: "EvidenceWriter", surface: "ReplaySurface", redactor: "Redactor"
             ) -> OperatorChannel:
                 return OperatorChannel(
                     run_id=evidence.run_id,
                     capability_id=capability.capability.id,
                     evidence=evidence,
                     surface=surface,
-                    redactor=evidence.redactor,
+                    redactor=redactor,
                     resume_command=lambda run: (
                         f"uv run cua ops take-control {run} --evidence-root {evidence_root}"
                     ),
@@ -376,8 +380,10 @@ def _act_on(
     note: str = "",
 ) -> None:
     """One transition on one run's session file, with the errors an operator can act on."""
+    import os
     from typing import cast
 
+    from cua.policy.redact import Redactor
     from cua.session.state import (
         Actor,
         Event,
@@ -388,6 +394,13 @@ def _act_on(
     )
 
     path, state = _session(run_id, root)
+    # The note is free text in a committed evidence file, and an operator writes what they did,
+    # which is where a credential turns up. Redaction knows the environment's secrets; anything
+    # else the operator invents is why the file is flagged sensitive in the manifest.
+    known = Redactor(
+        [v for k, v in os.environ.items() if _SECRETISH.search(k) and len(v) >= 4],
+    )
+    note = known.free_text(note)
     try:
         updated = StateStore(path).transition(
             cast(Event, event),
@@ -405,6 +418,22 @@ def _act_on(
     typer.echo(f"{run_id}: {state.phase} -> {updated.phase} (controller {updated.controller})")
 
 
+def _alive(state: "SessionState") -> bool:
+    """Whether the process that owns the browser is still there. A paused run whose process died
+    cannot be taken: nothing would answer the hand-back."""
+    import os
+
+    if state.phase == "finished" or state.owner_pid is None:
+        return state.phase != "finished"
+    try:
+        os.kill(state.owner_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 @ops_app.command("list")
 def ops_list(evidence_root: EvidenceRootOption = Path("evidence/_scratch")) -> None:
     """Show runs with a session, paused ones first."""
@@ -415,9 +444,10 @@ def ops_list(evidence_root: EvidenceRootOption = Path("evidence/_scratch")) -> N
     waiting = [r for r in rows if r[1].phase in ("paused_for_human", "human_active", "resuming")]
     for path, state in waiting + [r for r in rows if r not in waiting]:
         held = f" held by {state.operator_id}" if state.operator_id else ""
+        dead = "" if _alive(state) else "  [dead: the run that owned this session is gone]"
         typer.echo(
             f"{state.run_id}  {state.phase:<16} controller={state.controller:<10}"
-            f" updated={state.updated_at:%H:%M:%S}{held}  {path.parent}"
+            f" updated={state.updated_at:%H:%M:%S}{held}  {path.parent}{dead}"
         )
 
 
@@ -426,8 +456,11 @@ def ops_show(
     run_id: str,
     evidence_root: EvidenceRootOption = Path("evidence/_scratch"),
     open_screenshot: Annotated[
-        bool, typer.Option("--open", help="Open the screenshot in the default viewer.")
-    ] = False,
+        bool,
+        typer.Option(
+            "--open/--no-open", help="Open the screenshot in the default viewer. On by default."
+        ),
+    ] = True,
 ) -> None:
     """Print the open intervention request for a run."""
     import json
@@ -456,6 +489,14 @@ def ops_take_control(
     """Take the live session from automation. The run stops touching the browser and starts
     recording what you do."""
     who = _operator_id(operator)
+    _, state = _session(run_id, evidence_root)
+    if not _alive(state):
+        typer.echo(
+            f"{run_id}: the run that owned this session is gone, so nothing would answer a "
+            "hand-back. Nothing to take.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     _act_on(run_id, evidence_root, "take_control", "operator", operator=who)
     typer.echo(
         f"{who} holds run {run_id}. Work in the open browser window, then:\n"
