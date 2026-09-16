@@ -53,7 +53,8 @@ his behalf and confirmed it at the phase stop.
 | 43 | 2026-09-16 | 6 | Run ids and evidence paths are never redacted: masking their digits made `result.json` disagree with the manifest beside it. | Delegated | `src/cua/evidence/writer.py` |
 | 44 | 2026-09-16 | 6 | Every committed evidence run was regenerated after these changes, so no run predates the code or the policy that produced it. | Delegated | evidence/README.md |
 
+| 45 | 2026-09-16 | 6 | Published as the public repo `ShreyPatel4/cua-record-replay` over SSH, after checking that `.env` and interface.ai's brief are gitignored and absent from the pushed tree. | Shrey | https://github.com/ShreyPatel4/cua-record-replay |
+
 ## Still open
 
-- The GitHub repo `cua-record-replay` does not exist yet. `gh repo create` needs a yes first.
-- A fresh Anthropic API key for the phase 6 discovery run.
+- Nothing blocking. The submission is public and every phase gate is green.
