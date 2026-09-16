@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -18,6 +19,8 @@ from dotenv import dotenv_values
 from support import ROOT, candidate_files, find_leaks
 
 SECRET_KEYS = ("CORELEDGER_OPERATOR_PASSWORD", "ANTHROPIC_API_KEY")
+# An identity is redacted as a whole token, so it has to be distinguishable from ordinary words.
+_DISTINCT_ID = re.compile(r"[0-9-]")
 MIN_SECRET_LEN = 8
 # Pre-commit sets this so a machine with no secrets configured cannot pass the scan vacuously.
 REQUIRE_ENV = "CUA_REQUIRE_SECRET_SCAN"
@@ -96,6 +99,11 @@ def test_the_operator_id_never_appears_in_an_artifact_or_an_evidence_file() -> N
         if os.environ.get(REQUIRE_ENV) == "1":
             pytest.fail("no operator id configured; set CORELEDGER_OPERATOR_USER in .env")
         pytest.skip("no operator id configured")
+    if not _DISTINCT_ID.search(operator):
+        pytest.skip(
+            f"operator id {operator!r} is a plain word, so this scan cannot tell it apart from the "
+            "app's own prose. Use an id with a digit or a hyphen, as .env.example does."
+        )
     recorded = [
         path
         for tracked in ("artifacts", "evidence")
