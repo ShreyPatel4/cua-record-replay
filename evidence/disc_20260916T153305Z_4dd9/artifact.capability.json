@@ -1,0 +1,959 @@
+{
+  "schema_version": "1.0",
+  "capability": {
+    "id": "coreledger.member.open_subaccount",
+    "version": "1.0.0",
+    "status": "draft",
+    "name": "Open member sub-account",
+    "description": "Open a new <account_type> sub-account for member <member_number> with the nickname <nickname> and an initial deposit of <initial_deposit>. Report the new sub-account number.",
+    "created_at": "2026-09-16T15:33:05Z",
+    "created_from_run_id": "disc_20260916T153305Z_4dd9",
+    "policy_ref": "coreledger-subaccount"
+  },
+  "surface": {
+    "kind": "web",
+    "entry_url": "http://127.0.0.1:5050/",
+    "app_family": "coreledger",
+    "app_version_hint": "4.2.1"
+  },
+  "secrets": [
+    {
+      "name": "operator_id",
+      "kind": "identity",
+      "env_var": "CORELEDGER_OPERATOR_USER",
+      "description": "Supplied at run time from CORELEDGER_OPERATOR_USER; never stored."
+    },
+    {
+      "name": "operator_password",
+      "kind": "credential",
+      "env_var": "CORELEDGER_OPERATOR_PASSWORD",
+      "description": "Supplied at run time from CORELEDGER_OPERATOR_PASSWORD; never stored."
+    }
+  ],
+  "inputs": [
+    {
+      "name": "member_number",
+      "type": "string",
+      "description": "Typed into 'Member number'. Discovery saw a 5-digit value.",
+      "required": true,
+      "pattern": "^[0-9]{5}$",
+      "sensitive": false
+    },
+    {
+      "name": "account_type",
+      "type": "string",
+      "description": "Typed into 'Account type'.",
+      "required": true,
+      "sensitive": false
+    },
+    {
+      "name": "nickname",
+      "type": "string",
+      "description": "Typed into 'Nickname'.",
+      "required": true,
+      "sensitive": false
+    },
+    {
+      "name": "initial_deposit",
+      "type": "string",
+      "description": "Typed into 'Initial deposit'.",
+      "required": true,
+      "sensitive": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "new_sub_account_number",
+      "type": "string",
+      "description": "Value shown by the text right of 'Sub-account number' when the flow ends.",
+      "extract": {
+        "target": {
+          "ladder": [
+            {
+              "strategy": "anchor_relative",
+              "anchor_text": "Sub-account number",
+              "direction": "right",
+              "same_row": true,
+              "target_kind": "text",
+              "nth": 1,
+              "confidence": 0.8
+            },
+            {
+              "strategy": "bbox",
+              "x": 0.1658,
+              "y": 0.0479,
+              "w": 0.1502,
+              "h": 0.0306,
+              "fragile": true,
+              "confidence": 0.4
+            }
+          ],
+          "recorded_rung": 0,
+          "frame_path": [
+            "main"
+          ],
+          "fingerprint": {
+            "role": "cell",
+            "kind": "text"
+          },
+          "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Sub-account number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
+        },
+        "parse": "text"
+      },
+      "sensitive": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "s01",
+      "action": "navigate",
+      "description": "Open the application entry page.",
+      "url": "{{surface.entry_url}}",
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_operator_sign_in",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s02",
+      "action": "type_text",
+      "description": "Enter {{secrets.operator_id}} into 'Operator ID'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Operator ID",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Operator ID",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Operator sign-in",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.4908,
+            "y": 0.1012,
+            "w": 0.0977,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Operator ID",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+      },
+      "value": "{{secrets.operator_id}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s03",
+      "action": "type_text",
+      "description": "Enter {{secrets.operator_password}} into 'Password'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "textbox",
+            "name": "Password",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "label_text",
+            "label": "Password",
+            "relation": "wrapped",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Operator ID",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.4747,
+            "y": 0.1358,
+            "w": 0.0977,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "name": "Password",
+          "input_type": "password",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Password', the handle least tied to layout. label_text: reached through its visible label 'Password' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator ID', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+      },
+      "value": "{{secrets.operator_password}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s04",
+      "action": "click",
+      "description": "Click 'Sign in'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "button",
+            "name": "Sign in",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Password",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.5441,
+            "y": 0.1691,
+            "w": 0.0443,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "button",
+          "name": "Sign in",
+          "input_type": "submit",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it button 'Sign in', the handle least tied to layout. anchor_relative: the clickable below the fixed text 'Password', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_member_lookup",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s05",
+      "action": "type_text",
+      "description": "Enter {{inputs.member_number}} into the textbox labelled 'Member number'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Member number",
+            "relation": "same_row",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1355,
+            "y": 0.0493,
+            "w": 0.0758,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "value": "{{inputs.member_number}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s06",
+      "action": "click",
+      "description": "Click 'Find'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "text_exact",
+            "text": "Find",
+            "confidence": 0.85
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Member number",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.2144,
+            "y": 0.0466,
+            "w": 0.0451,
+            "h": 0.0333,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "cell",
+          "name": "Find",
+          "text": "Find",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. text_exact: its own text 'Find' is interface wording, not data. anchor_relative: the clickable right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_member_profile",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s07",
+      "action": "click",
+      "description": "Click 'Open sub-account'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "role_name",
+            "role": "link",
+            "name": "Open sub-account",
+            "confidence": 0.95
+          },
+          {
+            "strategy": "text_exact",
+            "text": "Open sub-account",
+            "confidence": 0.85
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.007,
+            "y": 0.2224,
+            "w": 0.114,
+            "h": 0.0253,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "link",
+          "name": "Open sub-account",
+          "text": "Open sub-account",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it link 'Open sub-account', the handle least tied to layout. text_exact: its own text 'Open sub-account' is interface wording, not data. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "risk": "safe",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_account_type",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s08",
+      "action": "select_option",
+      "description": "Choose '{{inputs.account_type}}' in the combobox labelled 'Account type'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Account type",
+            "relation": "same_row",
+            "control": "combobox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Account type",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "select",
+            "nth": 1,
+            "confidence": 0.8
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "combobox",
+          "kind": "select"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Account type' (same row), which survives the control moving. anchor_relative: the select right of the fixed text 'Account type' in the same row, which survives the element itself being renamed."
+      },
+      "option_label": "{{inputs.account_type}}",
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s09",
+      "action": "type_text",
+      "description": "Enter {{inputs.nickname}} into the textbox labelled 'Nickname'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Nickname",
+            "relation": "same_row",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Nickname",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1189,
+            "y": 0.0826,
+            "w": 0.1195,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Nickname' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Nickname' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "value": "{{inputs.nickname}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s10",
+      "action": "type_text",
+      "description": "Enter {{inputs.initial_deposit}} into the textbox labelled 'Initial deposit'.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "label_text",
+            "label": "Initial deposit",
+            "relation": "same_row",
+            "control": "textbox",
+            "confidence": 0.9
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Initial deposit",
+            "direction": "right",
+            "same_row": true,
+            "target_kind": "input",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1189,
+            "y": 0.1158,
+            "w": 0.0648,
+            "h": 0.028,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "textbox",
+          "input_type": "text",
+          "kind": "input"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Initial deposit' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Initial deposit' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "value": "{{inputs.initial_deposit}}",
+      "clear_first": true,
+      "risk": "reversible",
+      "wait_for": {
+        "kind": "settle",
+        "quiet_ms": 300,
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    },
+    {
+      "id": "s11",
+      "action": "click",
+      "description": "Click 'Create sub-account' and accept the confirm dialog.",
+      "target": {
+        "ladder": [
+          {
+            "strategy": "text_exact",
+            "text": "Create sub-account",
+            "confidence": 0.85
+          },
+          {
+            "strategy": "anchor_relative",
+            "anchor_text": "Account type -- select -- Share Certificate Money Market Holiday Club",
+            "direction": "below",
+            "same_row": false,
+            "target_kind": "clickable",
+            "nth": 1,
+            "confidence": 0.8
+          },
+          {
+            "strategy": "bbox",
+            "x": 0.1181,
+            "y": 0.1478,
+            "w": 0.1412,
+            "h": 0.0333,
+            "fragile": true,
+            "confidence": 0.4
+          }
+        ],
+        "recorded_rung": 0,
+        "frame_path": [
+          "main"
+        ],
+        "fingerprint": {
+          "role": "cell",
+          "name": "Create sub-account",
+          "text": "Create sub-account",
+          "kind": "clickable"
+        },
+        "notes": "Every rung here resolved to exactly this element on the live page. text_exact: its own text 'Create sub-account' is interface wording, not data. anchor_relative: the clickable below the fixed text 'Account type -- select -- Share Certificate Money Market Holiday Club', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+      },
+      "dialog": {
+        "dialog_type": "confirm",
+        "message_pattern": "^Open\\ this\\ sub\\-account\\?\\ This\\ cannot\\ be\\ undone\\.$",
+        "response": "accept"
+      },
+      "risk": "irreversible",
+      "wait_for": {
+        "kind": "checkpoint",
+        "checkpoint": "cp_sub_account_opened",
+        "timeout_ms": 10000
+      },
+      "on_fail": "hard_failure"
+    }
+  ],
+  "checkpoints": {
+    "cp_operator_sign_in": {
+      "description": "After s01: 'Operator sign-in' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Operator sign-in",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "role_name",
+                  "role": "textbox",
+                  "name": "Operator ID",
+                  "confidence": 0.95
+                },
+                {
+                  "strategy": "label_text",
+                  "label": "Operator ID",
+                  "relation": "wrapped",
+                  "control": "textbox",
+                  "confidence": 0.9
+                },
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Operator sign-in",
+                  "direction": "below",
+                  "same_row": false,
+                  "target_kind": "input",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.4908,
+                  "y": 0.1012,
+                  "w": 0.0977,
+                  "h": 0.028,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "textbox",
+                "name": "Operator ID",
+                "input_type": "text",
+                "kind": "input"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it textbox 'Operator ID', the handle least tied to layout. label_text: reached through its visible label 'Operator ID' (wrapped), which survives the control moving. anchor_relative: the input below the fixed text 'Operator sign-in', which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. It takes or shows sensitive data, so its text is never recorded."
+            }
+          }
+        ]
+      }
+    },
+    "cp_member_lookup": {
+      "description": "After s04: 'Member Lookup' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member Lookup",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "label_text",
+                  "label": "Member number",
+                  "relation": "same_row",
+                  "control": "textbox",
+                  "confidence": 0.9
+                },
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Member number",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "input",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.1355,
+                  "y": 0.0493,
+                  "w": 0.0758,
+                  "h": 0.028,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "textbox",
+                "input_type": "text",
+                "kind": "input"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Member number' (same row), which survives the control moving. anchor_relative: the input right of the fixed text 'Member number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change."
+            }
+          }
+        ]
+      }
+    },
+    "cp_member_profile": {
+      "description": "After s06: 'Member profile' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Member profile",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "role_name",
+                  "role": "link",
+                  "name": "Open sub-account",
+                  "confidence": 0.95
+                },
+                {
+                  "strategy": "text_exact",
+                  "text": "Open sub-account",
+                  "confidence": 0.85
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.007,
+                  "y": 0.2224,
+                  "w": 0.114,
+                  "h": 0.0253,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "link",
+                "name": "Open sub-account",
+                "text": "Open sub-account",
+                "kind": "clickable"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. role_name: the accessibility tree calls it link 'Open sub-account', the handle least tied to layout. text_exact: its own text 'Open sub-account' is interface wording, not data. bbox: coordinates as a last resort, broken by any layout change."
+            }
+          }
+        ]
+      }
+    },
+    "cp_account_type": {
+      "description": "After s07: 'Account type' is showing and the next control is present.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Account type",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "label_text",
+                  "label": "Account type",
+                  "relation": "same_row",
+                  "control": "combobox",
+                  "confidence": 0.9
+                },
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Account type",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "select",
+                  "nth": 1,
+                  "confidence": 0.8
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "combobox",
+                "kind": "select"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. label_text: reached through its visible label 'Account type' (same row), which survives the control moving. anchor_relative: the select right of the fixed text 'Account type' in the same row, which survives the element itself being renamed."
+            }
+          }
+        ]
+      }
+    },
+    "cp_sub_account_opened": {
+      "description": "The goal is reached: 'Sub-account opened' is showing and the values to read are on screen.",
+      "condition": {
+        "kind": "all",
+        "conditions": [
+          {
+            "kind": "text_present",
+            "text": "Sub-account opened",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.member_number}}",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.account_type}}",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.nickname}}",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "text_present",
+            "text": "{{inputs.initial_deposit}}",
+            "frame_path": [
+              "main"
+            ]
+          },
+          {
+            "kind": "element_present",
+            "target": {
+              "ladder": [
+                {
+                  "strategy": "anchor_relative",
+                  "anchor_text": "Sub-account number",
+                  "direction": "right",
+                  "same_row": true,
+                  "target_kind": "text",
+                  "nth": 1,
+                  "confidence": 0.8
+                },
+                {
+                  "strategy": "bbox",
+                  "x": 0.1658,
+                  "y": 0.0479,
+                  "w": 0.1502,
+                  "h": 0.0306,
+                  "fragile": true,
+                  "confidence": 0.4
+                }
+              ],
+              "recorded_rung": 0,
+              "frame_path": [
+                "main"
+              ],
+              "fingerprint": {
+                "role": "cell",
+                "kind": "text"
+              },
+              "notes": "Every rung here resolved to exactly this element on the live page. anchor_relative: the text right of the fixed text 'Sub-account number' in the same row, which survives the element itself being renamed. bbox: coordinates as a last resort, broken by any layout change. Its own text is data that changes per record, so nothing keys on it. Weak target: only position identifies it, so replay reports any fallback as drift."
+            }
+          }
+        ]
+      }
+    }
+  },
+  "outcome_detectors": [],
+  "success": {
+    "checkpoint": "cp_sub_account_opened",
+    "requires_outputs": [
+      "new_sub_account_number"
+    ]
+  },
+  "tenant_overrides": {},
+  "provenance": {
+    "recorded_by": "discover",
+    "model": "claude-sonnet-4-6",
+    "evidence_run": "evidence/disc_20260916T153305Z_4dd9",
+    "review_notes": "Recorded by discovery on the happy path. Each checkpoint is the text that appeared after its step plus the element the next step acts on. Outcome detectors are empty on purpose: one successful run cannot observe a not-found result, an interstitial, a slow load, an expired session, or an app error, so a reviewer adds them, and tunes timeouts, before approval."
+  }
+}

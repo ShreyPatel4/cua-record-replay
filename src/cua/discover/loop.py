@@ -466,15 +466,36 @@ class DiscoveryLoop:
             body += self._screen_blocks(screen) if latest else [omitted]
             if exchange.tool_use_id is None:
                 messages.append({"role": "user", "content": body})
+            elif exchange.is_error:
+                # An error tool_result may hold text only. The screen follows it as its own blocks
+                # in the same turn, so the model still sees what the failed call left behind.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": exchange.tool_use_id,
+                                "content": [{"type": "text", "text": exchange.text}],
+                                "is_error": True,
+                            },
+                            *(self._screen_blocks(screen) if latest else [omitted]),
+                        ],
+                    }
+                )
             else:
-                result: dict[str, Any] = {
-                    "type": "tool_result",
-                    "tool_use_id": exchange.tool_use_id,
-                    "content": body,
-                }
-                if exchange.is_error:
-                    result["is_error"] = True
-                messages.append({"role": "user", "content": [result]})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": exchange.tool_use_id,
+                                "content": body,
+                            }
+                        ],
+                    }
+                )
         return messages
 
     # ---- perceiving -----------------------------------------------------------------------------

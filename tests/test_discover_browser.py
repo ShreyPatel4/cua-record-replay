@@ -41,8 +41,9 @@ SECRETS = [
 def _latest_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = messages[-1]["content"]
     if content and content[0].get("type") == "tool_result":
-        blocks: list[dict[str, Any]] = content[0]["content"]
-        return blocks
+        # An error result holds text only, and the screen follows it as sibling blocks.
+        inner: list[dict[str, Any]] = content[0]["content"]
+        return [*inner, *content[1:]]
     return content
 
 
@@ -77,6 +78,7 @@ class ScriptedModel:
         self.results: list[str] = []
         self.calls = 0
         self.fail_first_call = fail_first_call
+        self.turns: list[list[dict[str, Any]]] = []
 
     def complete(
         self, *, system: str, tools: list[dict[str, Any]], messages: list[dict[str, Any]]
@@ -85,6 +87,7 @@ class ScriptedModel:
         self.calls += 1
         if self.fail_first_call and self.calls == 1:
             raise TransientModelError("HTTP 529: OverloadedError")
+        self.turns.append([dict(m) for m in messages])
         blocks = _latest_blocks(messages)
         texts = [b["text"] for b in blocks if b.get("type") == "text"]
         screen = next(t for t in texts if t.startswith("Screen "))
@@ -328,6 +331,23 @@ def test_two_actions_that_change_nothing_stop_the_run_as_stuck(
     assert result.artifact_path is None
     assert len(model.screens) == 2
     assert list(Path(result.evidence_dir).glob("a11y_*.json"))
+
+
+def test_a_failed_call_is_reported_as_text_only_with_the_screen_beside_it(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    """The API refuses an error tool_result that carries an image, so the screen rides beside it
+    in the same turn. Found on the real open_subaccount run: the dismissed dialog is an error
+    result, and the next model call was rejected with a 400."""
+    bad: Move = lambda s: ("click", {"ref": "zz999"})  # noqa: E731
+    give_up: Move = lambda s: ("give_up", {"reason": "demo"})  # noqa: E731
+    _, model, _ = _discover(tmp_path, coreledger, mock_settings, browser, [bad, give_up])
+    after_error = model.turns[-1][-1]["content"]
+    result = after_error[0]
+    assert result["type"] == "tool_result"
+    assert result["is_error"] is True
+    assert [b["type"] for b in result["content"]] == ["text"], "an image here is a 400"
+    assert any(b["type"] == "image" for b in after_error[1:]), "the screen still reaches the model"
 
 
 def test_a_stuck_discovery_run_leaves_an_intervention_for_a_human(

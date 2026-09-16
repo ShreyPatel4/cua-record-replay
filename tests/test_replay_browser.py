@@ -702,3 +702,96 @@ def test_a_password_typed_by_hand_reaches_neither_the_action_log_nor_the_trace(
     manifest = json.loads((run_dir / "manifest.json").read_text())
     flagged = {f["path"] for f in manifest["files"] if f["sensitive"]}
     assert {"human_actions.jsonl", "trace.zip", "session_state.json"} <= flagged
+
+
+SUBACCOUNT_ARTIFACT = ROOT / "artifacts" / "coreledger.member.open_subaccount@1.1.0.capability.json"
+SUBACCOUNT_INPUTS = {
+    "member_number": "10007",
+    "account_type": "Holiday Club",
+    "nickname": "Vacation fund",
+    "initial_deposit": "25.00",
+}
+
+
+@pytest.fixture
+def opener(replayer: Replayer, coreledger: RunningMockApp) -> Capability:
+    """The irreversible capability, pointed at this test's ephemeral CoreLedger."""
+    return Capability.model_validate_json(
+        SUBACCOUNT_ARTIFACT.read_text().replace(f"{RECORDED_ORIGIN}/", f"{coreledger.base_url}/")
+    )
+
+
+def _open_subaccount(replayer: Replayer, opener: Capability, **changes: Any) -> ReplayResult:
+    inputs = {**SUBACCOUNT_INPUTS, **changes.pop("inputs", {})}
+    fields: dict[str, Any] = {
+        "capability": opener,
+        "inputs": inputs,
+        "policy_file": replayer.policy_file,
+        "evidence_root": replayer.evidence_root,
+        "allow_draft": True,
+        **changes,
+    }
+    return run_replay(
+        ReplayRequest(**fields), environ=replayer.environ, open_surface=replayer.open_surface
+    )
+
+
+def test_the_irreversible_capability_opens_one_sub_account_and_returns_its_number(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp
+) -> None:
+    result = _open_subaccount(replayer, opener, confirm_irreversible=True)
+    assert (result.status, result.exit_code) == ("success", 0)
+    numbers = list(coreledger.state.ledger.subaccounts)
+    assert len(numbers) == 1, "the create click happened exactly once"
+    assert result.outputs["new_sub_account_number"] == numbers[0]
+    opened = coreledger.state.ledger.subaccounts[numbers[0]]
+    assert (opened.member_id, opened.nickname) == ("10007", "Vacation fund")
+    assert str(opened.initial_deposit) == "25.00"
+    assert result.steps[-1].step_id == "s11"
+
+
+def test_without_the_confirm_flag_nothing_is_created(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp
+) -> None:
+    """The gate's confirm handling is the whole point of the capability: an irreversible step
+    needs a human's say-so on the command line, and refusing it must leave the app untouched."""
+    result = _open_subaccount(replayer, opener)
+    assert (result.status, result.outcome_code, result.exit_code) == (
+        "hard_failure",
+        "CONFIRMATION_REQUIRED",
+        2,
+    )
+    assert coreledger.state.ledger.subaccounts == {}
+    assert result.message
+    assert "--confirm-irreversible" in result.message
+    assert result.step_reached == "s11"
+
+
+def test_a_deposit_below_the_minimum_is_an_answer_and_creates_nothing(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp
+) -> None:
+    result = _open_subaccount(
+        replayer, opener, confirm_irreversible=True, inputs={"initial_deposit": "1.00"}
+    )
+    assert (result.status, result.outcome_code, result.exit_code) == (
+        "business_outcome",
+        "VALIDATION_ERROR",
+        0,
+    )
+    assert [(f.field, f.message) for f in result.field_errors] == [
+        ("initial_deposit", "Initial deposit must be at least $5.00.")
+    ]
+    assert coreledger.state.ledger.subaccounts == {}
+
+
+def test_an_account_type_the_app_does_not_offer_names_that_input(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp
+) -> None:
+    result = _open_subaccount(
+        replayer, opener, confirm_irreversible=True, inputs={"account_type": "Savings"}
+    )
+    # The select has no such option, so the act itself fails. Replay stops at that step rather
+    # than carrying on to the create click with whatever the form happened to hold.
+    assert (result.status, result.outcome_code) == ("hard_failure", "ACTION_FAILED")
+    assert coreledger.state.ledger.subaccounts == {}
+    assert result.step_reached == "s08"

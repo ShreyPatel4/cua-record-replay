@@ -99,7 +99,14 @@ class AnthropicModel:
         except anthropic.APIConnectionError as exc:
             raise TransientModelError(f"connection failed: {type(exc).__name__}") from exc
         except anthropic.APIStatusError as exc:
-            detail = f"HTTP {exc.status_code}: {type(exc).__name__}"
+            # The API's own words: a 400 is a request this code built wrong, and the run log is
+            # where that has to be visible. Redaction runs over the message before it is written.
+            said = ""
+            if isinstance(exc.body, dict):
+                error = exc.body.get("error")
+                if isinstance(error, dict):
+                    said = f" {error.get('type', '')}: {error.get('message', '')}".rstrip()
+            detail = f"HTTP {exc.status_code}: {type(exc).__name__}{said}"
             if exc.status_code in _TRANSIENT_STATUS or exc.status_code >= 500:
                 raise TransientModelError(detail) from exc
             raise ModelError(detail) from exc

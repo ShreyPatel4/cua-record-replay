@@ -1,0 +1,96 @@
+{
+  "run_id": "replay_20260916T153610Z_aff3e0",
+  "files": [
+    {
+      "path": "a11y_11.json",
+      "sha256": "3e0955403153a734e4233040f65b35355bd2d67076c15143b1ae235b8ebcb6b7",
+      "bytes": 13372,
+      "sensitive": true
+    },
+    {
+      "path": "result.json",
+      "sha256": "20242807378fc4aa79433aa2a42be0244497bb3056d8c0e581827ec707b3459c",
+      "bytes": 3385,
+      "sensitive": false
+    },
+    {
+      "path": "run.jsonl",
+      "sha256": "240f3e3c7ab5b4026a7e75cd2146573cf328a5821673e1a8979f98c0e7bcc84c",
+      "bytes": 11787,
+      "sensitive": false
+    },
+    {
+      "path": "step_01.png",
+      "sha256": "01ff1b1951393485310c132e44dae0fedf0e4a6cc98fe9dbede678104cfedb9d",
+      "bytes": 19519,
+      "sensitive": true
+    },
+    {
+      "path": "step_02.png",
+      "sha256": "6eb3d35f0fe33169735be33331cb097c42dcc4525a98ec56fcf22db3f87de0b8",
+      "bytes": 20941,
+      "sensitive": true
+    },
+    {
+      "path": "step_03.png",
+      "sha256": "b4e9707d4c4e19f4e3c1685b906e27b22f017ae5b4b7066cb9c16de7852eabd1",
+      "bytes": 21185,
+      "sensitive": true
+    },
+    {
+      "path": "step_04.png",
+      "sha256": "a05f1f31965a1ae76131cfab3fa5d11360fdf0dada740d74bc0e8783b16b62b8",
+      "bytes": 16625,
+      "sensitive": false
+    },
+    {
+      "path": "step_05.png",
+      "sha256": "84b2d5483610f74f009c120f1b5cfe1cf88627163be8144e557303d2af0bd77a",
+      "bytes": 17540,
+      "sensitive": false
+    },
+    {
+      "path": "step_06.png",
+      "sha256": "e4d9d403e7ba04ac2f201d0e7cdf11bc9d1ec4cc939653849070b2509799ae26",
+      "bytes": 39948,
+      "sensitive": false
+    },
+    {
+      "path": "step_07.png",
+      "sha256": "0aa0a05c2e23b72541840f031ded8baaf059bbfa7e71f01c2957c498a34e53dc",
+      "bytes": 29405,
+      "sensitive": false
+    },
+    {
+      "path": "step_08.png",
+      "sha256": "adab931734324e4d642fc9f218d32b5e81d02108b2941f18e4de6bf0769bab39",
+      "bytes": 29829,
+      "sensitive": false
+    },
+    {
+      "path": "step_09.png",
+      "sha256": "f2f60606f728ce97ae104a665588d89cbacaf39632fbba4dab57eb01f052df2f",
+      "bytes": 31699,
+      "sensitive": false
+    },
+    {
+      "path": "step_10.png",
+      "sha256": "148c8183c0c7b1ab62d8543d749d0afb0871ebdfba990162723497b186ab445f",
+      "bytes": 32451,
+      "sensitive": false
+    },
+    {
+      "path": "step_11.png",
+      "sha256": "148c8183c0c7b1ab62d8543d749d0afb0871ebdfba990162723497b186ab445f",
+      "bytes": 32451,
+      "sensitive": true
+    },
+    {
+      "path": "trace.zip",
+      "sha256": "4fffc7435152d08f778bdca7df472a3d7cb582e8ae83d4350460c69ac4ae46e1",
+      "bytes": 680344,
+      "sensitive": true
+    }
+  ],
+  "purge_note": "Files flagged sensitive are screenshots of sign-in pages or of screens showing a sensitive output. Screenshots are not image-redacted; delete flagged files before sharing evidence outside the team."
+}

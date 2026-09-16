@@ -1,0 +1,48 @@
+{
+  "run_id": "disc_20260916T153305Z_4dd9",
+  "goal": "Open a new Holiday Club sub-account for member *0007 with the nickname Vacation fund and an initial deposit of 25.00. Report the new sub-account number.",
+  "entry_url": "http://127.0.0.1:5050/",
+  "model": "claude-sonnet-4-6",
+  "policy": "coreledger-subaccount",
+  "status": "recorded",
+  "stop_reason": "done",
+  "message": "saved draft coreledger.member.open_subaccount@1.0.0; review it and add outcome detectors before approval",
+  "turns": 15,
+  "duration_ms": 59574,
+  "input_tokens": 41556,
+  "output_tokens": 1282,
+  "steps_recorded": 11,
+  "outputs": [
+    "new_sub_account_number"
+  ],
+  "parameters": [
+    {
+      "name": "member_number",
+      "label": "Member number",
+      "pattern": "^[0-9]{5}$",
+      "accepted": true
+    },
+    {
+      "name": "account_type",
+      "label": "Account type",
+      "pattern": null,
+      "accepted": true
+    },
+    {
+      "name": "nickname",
+      "label": "Nickname",
+      "pattern": null,
+      "accepted": true
+    },
+    {
+      "name": "initial_deposit",
+      "label": "Initial deposit",
+      "pattern": null,
+      "accepted": true
+    }
+  ],
+  "capability": "coreledger.member.open_subaccount@1.0.0",
+  "artifact_path": "artifacts/coreledger.member.open_subaccount@1.0.0.capability.json",
+  "evidence_dir": "evidence/disc_20260916T153305Z_4dd9",
+  "intervention_path": null
+}
