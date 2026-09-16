@@ -224,3 +224,9 @@ the schema should not need to change, and proving that is what the stub is for.
 
 Screens-as-states instead of ordered steps. Rejected: a runtime path choice makes replay
 non-deterministic, which is the property the whole system is selling.
+
+On the stretch list I took the ones that fell out of the core rather than adding surface: the
+approval gate, because a draft that replays unattended is the actual risk; multi-run stability,
+because the determinism claim needed a witness; and the catalog, because an agent invoking a
+capability by id is what the artifact is for. Code generation, assisted LLM fallback and the
+cross-tenant demonstration are the ones I left alone.

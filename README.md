@@ -106,13 +106,25 @@ repeats the step you were paused on, because you may have finished it by hand.
 
 ## Discovery (the one part that uses a model)
 
+Set `ANTHROPIC_API_KEY` in `.env` first. Then the demo path, goal to artifact to replay, end to
+end. It uses a fresh capability id, because discovery records `1.0.0` and refuses to overwrite a
+draft the catalog already holds:
+
 ```sh
+# 1. The model drives the live app and records what it did. About 7 turns, 30 s, a few cents.
 uv run cua discover \
   --goal "Log in, look up member 10007 and read their current savings balance." \
   --target http://127.0.0.1:5050/ \
-  --capability-id coreledger.member.read_savings_balance \
-  --name "Read member savings balance" --app-version 4.2.1
+  --capability-id coreledger.demo.read_savings_balance \
+  --name "Read member savings balance (demo)" --app-version 4.2.1 --yes
+
+# 2. Replay what it recorded, with no model in the loop. The draft needs --allow-draft,
+#    because unattended replay of an unreviewed recording is refused by design.
+uv run cua replay coreledger.demo.read_savings_balance --allow-draft -i member_number=10007
 ```
+
+Drop `--yes` to be asked, per proposed input, whether a literal the model typed should become a
+parameter. The run lands in `evidence/_scratch/disc_<id>/` and the draft in `artifacts/`.
 
 The model sees an accessibility snapshot and a screenshot, acts through the same policy gate replay
 uses, and never sees a credential value: it types `{{secrets.operator_password}}` and the gate

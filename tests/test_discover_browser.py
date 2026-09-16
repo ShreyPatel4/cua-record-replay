@@ -353,6 +353,36 @@ def test_a_failed_call_is_reported_as_text_only_with_the_screen_beside_it(
     assert any(b["type"] == "image" for b in after_error[1:]), "the screen still reaches the model"
 
 
+def test_the_turn_budget_stops_the_run_and_asks_for_a_human(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    """Brief section 3.1: max steps is a stopping condition. Scrolling is a legitimate no-op, so
+    the run is not stuck by the other detectors; it simply runs out of turns."""
+    down: Move = lambda s: ("scroll", {"direction": "down", "amount": 2})  # noqa: E731
+    up: Move = lambda s: ("scroll", {"direction": "up", "amount": 2})  # noqa: E731
+    result, model, _ = _discover(
+        tmp_path, coreledger, mock_settings, browser, [down, up, down, up], max_steps=3
+    )
+    assert (result.status, result.stop_reason) == ("stopped", "max_steps")
+    assert model.calls == 3, "the budget is turns, and it is enforced before a fourth call"
+    assert result.artifact_path is None
+    assert result.intervention_path, "a budget stop is a stuck state a human may want to see"
+
+
+def test_the_time_budget_stops_the_run_between_turns(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    """Section 3.1 again: timeout. It is checked between turns, so a call already in flight
+    finishes rather than being abandoned halfway through an action."""
+    down: Move = lambda s: ("scroll", {"direction": "down", "amount": 2})  # noqa: E731
+    result, model, _ = _discover(
+        tmp_path, coreledger, mock_settings, browser, [down, down, down], timeout_s=0.0
+    )
+    assert (result.status, result.stop_reason) == ("stopped", "timeout")
+    assert model.calls == 0, "the budget is checked before a turn starts, never mid-action"
+    assert result.intervention_path
+
+
 def test_a_stuck_discovery_run_leaves_an_intervention_for_a_human(
     tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
 ) -> None:
