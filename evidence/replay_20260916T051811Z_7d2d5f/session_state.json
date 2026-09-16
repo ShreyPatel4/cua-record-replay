@@ -1,0 +1,31 @@
+{
+  "run_id": "replay_20260916T051811Z_7d2d5f",
+  "kind": "replay",
+  "phase": "finished",
+  "controller": "nobody",
+  "version": 2,
+  "updated_at": "2026-09-16T05:18:34.166614Z",
+  "owner_pid": 80983,
+  "operator_id": null,
+  "intervention_id": "iv_01",
+  "history": [
+    {
+      "from_phase": "running",
+      "to_phase": "paused_for_human",
+      "event": "stuck_detected",
+      "actor": "automation",
+      "operator_id": null,
+      "at": "2026-09-16T05:18:14.049834Z",
+      "note": "The operator role is not allowed to open this record."
+    },
+    {
+      "from_phase": "paused_for_human",
+      "to_phase": "finished",
+      "event": "expire",
+      "actor": "system",
+      "operator_id": null,
+      "at": "2026-09-16T05:18:34.166614Z",
+      "note": "nobody took the session"
+    }
+  ]
+}

@@ -10,13 +10,49 @@ has a `manifest.json` listing its files with a sha256 and a `sensitive` flag.
 | `replay_20260914T074252Z_97774b/` | `business_outcome` `MEMBER_NOT_FOUND`, exit 0: a member who does not exist is an answer, returned with a field error on `member_number` and the app's own message. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=99999 --evidence-root evidence` |
 | `replay_20260914T074255Z_42ba0b/` | `recovered_then_success` through `od_system_notice`: the maintenance notice hides the profile, replay clicks OK once and the checkpoint then verifies. | `uv run cua mock inject interstitial`, then the success command, then `uv run cua mock reset` |
 | `replay_20260914T074259Z_6a80cf/` | `recovered_then_success` through `od_slow_member_load`: the profile takes 5 s against s06's 3 s wait, the timeout detector fires once, and its `wait_retry` budget (15 s) sees the profile arrive. | `uv run cua mock inject slow`, then the success command, then `uv run cua mock reset` |
-| `replay_20260914T074308Z_ed988e/` | `hard_failure` `PERMISSION_DENIED`, exit 2, for restricted member 10013, with `step_06.png`, `a11y_06.json`, and `trace.zip`. The detector asks for escalation; until the operator channel exists (phase 5) the escalation hook ends the run as a hard failure that keeps the code and says a human is needed. The trace covers sign-in and is scrubbed: no credential, operator id, or session cookie value survives in any member. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=10013 --evidence-root evidence` |
+| `replay_20260916T051839Z_acbcbf/` | `hard_failure` `PERMISSION_DENIED`, exit 2, for restricted member 10013, with `step_06.png`, `a11y_06.json`, and `trace.zip`. The detector asks for a human, and `--escalation-timeout 0` attaches no operator channel, so the run ends as a hard failure that keeps the code and says a human was needed. This is what an unattended caller with nobody on call gets. The trace covers sign-in and is scrubbed: no credential, operator id, or session cookie value survives in any member. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=10013 --escalation-timeout 0 --evidence-root evidence` |
+| `replay_20260916T051811Z_7d2d5f/` | `escalated`, exit 3, same detector with an operator channel attached (brief section 2.9). The run pauses, writes `intervention.json` with the screen, the reason, and the exact take-control command, and polls `session_state.json`. Nobody comes, so after 20 s the request expires, the session file ends `finished`, and the result carries the request path and an `expired` `HumanIntervention`. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=10013 --escalation-timeout 20 --evidence-root evidence` |
 | `replay_20260914T074312Z_992522/` | `success` under `layout_drift`: Find became Search one cell to the right, s06's text rung fails, the same-row anchor rung resolves it, and `warnings` carries a drift signal (recorded rung 0, resolved rung 1, identity changed). | `uv run cua mock inject layout_drift`, then the success command, then `uv run cua mock reset` |
 | `stability_20260914T074315Z_4fbced/` | `--repeat 5`: five successes, the same rung for every step in every run, equal output digests, `determinism: deterministic`, durations 2240 to 2347 ms. The five runs sit inside the directory next to `stability.json`. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=10007 --repeat 5 --evidence-root evidence` |
 
 The replay runs need CoreLedger running with the operator credentials in `.env` (`uv run cua mock
 serve`); the injections are armed through the mock's control API by `cua mock inject`, never by
 replay, which the policy keeps away from `/__control`.
+
+## Driving the handoff yourself
+
+The escalated run above is the half nobody answers. This is the other half, and it needs a person
+at the keyboard. Two terminals, about a minute.
+
+1. Terminal 1: `uv run cua mock serve`
+2. Terminal 2: `uv run cua mock inject app_error --param on=detail --times 1`
+3. Terminal 2: start the run headed, so you can see the browser it will hand you:
+
+   ```sh
+   uv run cua replay coreledger.member.read_savings_balance -i member_number=10007 \
+     --headed --escalation-timeout 300 --evidence-root evidence/_scratch
+   ```
+
+4. The run signs in, looks up the member, hits the 500 page, and stops. It prints the pause to
+   stderr with the run id and the exact command to take the session. Copy that command.
+5. Terminal 3: `uv run cua ops list --evidence-root evidence/_scratch` shows the run as
+   `paused_for_human`, then run the take-control command it printed. The browser window comes to
+   the front and is yours; replay will not touch it.
+6. In the browser, fix what the automation could not: reload the member page (the injection was
+   armed once, so the reload succeeds). You are looking at the member profile again.
+7. Terminal 3: `uv run cua ops hand-back <run_id> --evidence-root evidence/_scratch --note "reloaded the member page after the 500"`
+8. Replay re-runs the outcome detectors, re-verifies `cp_member_profile`, and carries on. It does
+   not click Find again: you may already have done the step by hand. The run finishes
+   `recovered_then_success`, exit 0, with the balance and a `HumanIntervention` in `recoveries`
+   naming you, your note, and how many of your actions were captured.
+
+`human_actions.jsonl` in that run directory holds what you did, redacted. `session_state.json`
+holds every transition: `stuck_detected`, `take_control`, `hand_back`, `checkpoint_reverified`,
+`finish`. `uv run cua ops abort <run_id>` instead of step 7 ends the run as `escalated`, exit 3.
+
+The same path is covered without a human by
+`test_a_human_takes_the_live_session_fixes_the_app_and_hands_it_back`, which drives the session
+file from inside the paused run's own poll.
 
 ## Reading a replay run
 
@@ -33,6 +69,16 @@ replay, which the policy keeps away from `/__control`.
   so the manifest always flags it sensitive.
 - `result.json`: the `ReplayResult`, with sensitive outputs masked (the caller gets the real value
   on stdout).
+- `intervention.json`: the open request when a run paused for a human, with the screen it paused
+  on (`intervention_NN.png`, `a11y_intervention_NN.json`), why, and the take-control command.
+  `interventions.jsonl` keeps every request from a run that paused more than once.
+- `session_state.json`: who held the live browser and every transition between them, with the
+  operator's own note. It is flagged sensitive: notes are free text, and redaction only masks the
+  secrets it knows about.
+- `human_actions.jsonl`: what a human did while they held the session, one line per click, per
+  field they left, and per navigation. Values are redacted, and anything typed into a field that
+  looks like a credential is masked and added to the redactor before the line is written, so it
+  cannot survive in the trace either. The file exists only if a human actually did something.
 
 ## Reading a discovery run
 

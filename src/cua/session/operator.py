@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 from cua.evidence.writer import EvidenceWriter
 from cua.policy.redact import REDACTED, Redactor
@@ -109,6 +110,7 @@ class OperatorChannel:
         self._pauses = 0
         self._actions = 0
         self._holding = False
+        self._capturing = False
         self._sink: TextIO | None = None
 
     # ---- the hook ----------------------------------------------------------------------------
@@ -205,7 +207,7 @@ class OperatorChannel:
         try:
             snapshot = self._surface.snapshot()
             png = self._surface.screenshot()
-            url = self._surface.frame_url([])
+            url = _working_url(snapshot.frame_urls) or self._surface.frame_url([])
         except Exception as exc:  # the screen is gone; the request still has to be written
             self._evidence.event("replay", "intervention_capture_failed", error=type(exc).__name__)
             return ("", "", "")
@@ -272,16 +274,22 @@ class OperatorChannel:
     # ---- capture -----------------------------------------------------------------------------
 
     def _begin_capture(self) -> None:
-        if self._sink is not None:
+        if self._capturing:
             return
-        self._sink = (self._evidence.dir / "human_actions.jsonl").open("a", encoding="utf-8")
-        self._evidence.flag_sensitive("human_actions.jsonl")
+        self._capturing = True
         try:
             self._surface.start_human_capture(self._write_action)
         except Exception as exc:  # capture is evidence, not control: never fail the handoff
+            self._capturing = False
             self._evidence.event("operator", "capture_failed", error=type(exc).__name__)
-            self._sink.close()
-            self._sink = None
+
+    def _open_sink(self) -> TextIO:
+        """The action log exists only once a human has done something, so a pause nobody answered
+        does not leave an empty file in evidence."""
+        if self._sink is None:
+            self._sink = (self._evidence.dir / "human_actions.jsonl").open("a", encoding="utf-8")
+            self._evidence.flag_sensitive("human_actions.jsonl")
+        return self._sink
 
     def _to_front(self) -> None:
         """The operator has taken the session; put the window where they can see it."""
@@ -296,7 +304,7 @@ class OperatorChannel:
             with suppress(ValueError):  # too short to redact safely; it is masked below anyway
                 self._redactor.add_credential(event.value)
         redact = self._redactor.free_text
-        if self._sink is None:
+        if not self._capturing:
             return
         credential = event.credential_field or (
             event.name is not None and bool(SENSITIVE_FIELD_RE.search(event.name))
@@ -313,19 +321,22 @@ class OperatorChannel:
             else redact(event.value or "") or None,
         }
         self._actions += 1
-        self._sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self._sink.flush()
+        sink = self._open_sink()
+        sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+        sink.flush()
 
     def _end_capture(self) -> None:
-        if self._sink is None:
+        if not self._capturing:
             return
+        self._capturing = False
         try:
             self._surface.stop_human_capture()
         except Exception as exc:
             self._evidence.event("operator", "capture_stop_failed", error=type(exc).__name__)
         finally:
-            self._sink.close()
-            self._sink = None
+            if self._sink is not None:
+                self._sink.close()
+                self._sink = None
 
     # ---- endings -----------------------------------------------------------------------------
 
@@ -421,6 +432,19 @@ class OperatorChannel:
             step_id=request.step_id,
             recoveries=(written,),
         )
+
+
+def _working_url(frame_urls: Mapping[str, str]) -> str:
+    """The frame the flow got furthest in, not the frameset shell or the banner beside it.
+
+    A legacy app splits one screen across frames, and the one an operator needs to see is the one
+    that navigated deepest, so the URL with the most path segments wins.
+    """
+
+    def depth(url: str) -> tuple[int, int]:
+        return (len([part for part in urlsplit(url).path.split("/") if part]), len(url))
+
+    return max(frame_urls.values(), key=depth) if frame_urls else ""
 
 
 def _taker(state: SessionState, since: datetime) -> tuple[datetime | None, str | None]:

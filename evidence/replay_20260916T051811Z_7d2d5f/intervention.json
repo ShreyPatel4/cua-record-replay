@@ -1,0 +1,21 @@
+{
+  "intervention_id": "iv_01",
+  "run_id": "replay_20260916T051811Z_7d2d5f",
+  "kind": "replay",
+  "capability_id": "coreledger.member.read_savings_balance",
+  "goal": null,
+  "step_id": "s06",
+  "reason_code": "HARD_FAILURE_ESCALATE",
+  "reason_text": "The operator role is not allowed to open this record.",
+  "current_url": "http://127.0.0.1:5050/members/*0013",
+  "screenshot_path": "intervention_01.png",
+  "a11y_snapshot_path": "a11y_intervention_01.json",
+  "suggested_actions": [
+    "Read the screen and clear whatever is blocking it, then hand back.",
+    "Replay will not repeat the step it paused on. If that step never happened, do it by hand before you hand back; replay only re-checks the screen.",
+    "If the app is broken rather than blocked, abort and the run ends as escalated."
+  ],
+  "resume_command": "uv run cua ops take-control replay_20260916T051811Z_7d2d5f --evidence-root evidence",
+  "requested_at": "2026-09-16T05:18:14.048694Z",
+  "expires_at": "2026-09-16T05:18:34.048694Z"
+}

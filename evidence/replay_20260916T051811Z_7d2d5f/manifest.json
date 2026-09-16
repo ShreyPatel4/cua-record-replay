@@ -1,23 +1,53 @@
 {
-  "run_id": "replay_20260914T074308Z_ed988e",
+  "run_id": "replay_20260916T051811Z_7d2d5f",
   "files": [
     {
-      "path": "a11y_06.json",
+      "path": "a11y_intervention_01.json",
       "sha256": "6730e4cfbb62a620bdaeafaf5f8f36ae48985f402ece194f25484bfe8e5122bd",
       "bytes": 7390,
       "sensitive": true
     },
     {
+      "path": "intervention.json",
+      "sha256": "361710c9c117362128c40590f6d48d96cf72835478896b1b85462d169bef1ea8",
+      "bytes": 1009,
+      "sensitive": false
+    },
+    {
+      "path": "intervention_01.png",
+      "sha256": "a35ea72729c7e30e22f9be620ca273c2489e73227b98ccf21f4ba010bf4c5cd6",
+      "bytes": 30000,
+      "sensitive": true
+    },
+    {
+      "path": "interventions.jsonl",
+      "sha256": "60b4f6b4bc8c16c95fdac6b8a0a358ab4dde3c0383a45eaa80350b3d63b1ef6c",
+      "bytes": 961,
+      "sensitive": false
+    },
+    {
       "path": "result.json",
-      "sha256": "8361090344712f606cee666dc5ffab92d5aaf27f39fbce13952effdcdb2829b8",
-      "bytes": 2139,
+      "sha256": "acc50ebf9867b15b336893d1b5d462ba0c8de484830ab02d8b83dcfe52ac68fc",
+      "bytes": 2512,
       "sensitive": false
     },
     {
       "path": "run.jsonl",
-      "sha256": "f85a97b738a0151a6844913933ffaabe121b21db85e78746e8d9baa282e7ceaf",
-      "bytes": 6653,
+      "sha256": "8d20ddb1c21c2a361f7fbaa488d8755921961f24b271bbb5f1d9c0e0539d8d9d",
+      "bytes": 7468,
       "sensitive": false
+    },
+    {
+      "path": "session_state.json",
+      "sha256": "f758576a8f36e2ea1c111d5c76329f38f0926918d9f45d61d6711bf1b0393a9c",
+      "bytes": 802,
+      "sensitive": true
+    },
+    {
+      "path": "session_state.json.lock",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "sensitive": true
     },
     {
       "path": "step_01.png",
@@ -50,15 +80,9 @@
       "sensitive": false
     },
     {
-      "path": "step_06.png",
-      "sha256": "a35ea72729c7e30e22f9be620ca273c2489e73227b98ccf21f4ba010bf4c5cd6",
-      "bytes": 30000,
-      "sensitive": true
-    },
-    {
       "path": "trace.zip",
-      "sha256": "73775fa8090d7192199a5ddca4130275b740ce7e18accd4fc7876a247d50c0cc",
-      "bytes": 375754,
+      "sha256": "2d342dc8d4a3ab36ec886972e36fcaf47960e110fd80fc21a41ed4325f2bb728",
+      "bytes": 380728,
       "sensitive": true
     }
   ],
