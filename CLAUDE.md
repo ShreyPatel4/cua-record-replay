@@ -422,6 +422,46 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
 - The operator id comes from `--operator`, `$CUA_OPERATOR`, or `$USER`. It lands in the session
   file, the request, and the result, so committed evidence uses a demo id, not a real account.
 
+### Fixed after the phase 5 review (3 blocking, 4 high, 7 medium, lows and nits)
+
+- A hand-back on a step whose wait is a settle crashed the run: the result validator counted only
+  `reverified` hand-backs as successful recoveries, and a settle step has no checkpoint to
+  re-verify. A `handed_back` intervention now counts; `reverified` still means the checkpoint
+  passed.
+- An operator who took the session and walked away held the browser forever: the expiry branch
+  was unreachable once the phase was `human_active`. Expiry is checked every poll, and taking
+  control restarts the clock so an operator who takes it at the last second gets the full window.
+- An operator note reached `session_state.json` unredacted through the ops CLI. Notes are
+  redacted against the environment's secrets before the transition, and the session file and its
+  lock are flagged sensitive, because redaction cannot know a credential an operator invents.
+- Losing control mid-run was a traceback. `NotInControl` becomes an `OPERATOR_ABORTED` stop that
+  keeps the run's intervention path, and the channel's own end-of-life transitions never raise:
+  an aborted session is already over.
+- The pause's ending is read from its own transitions, so an abort on a run nobody took is no
+  longer recorded as an expiry, and an operator who answered an earlier pause is not blamed for a
+  later one.
+- A recovery in flight when the escalation happened vanished from `recoveries`: `_HandedBack` now
+  closes the open recoveries on its way out, like `RunStopped` does.
+- The escalation text promised something resume does not do. It now says replay will not repeat
+  the step, so a step that never happened has to be done by hand before the hand-back.
+- Capture starts at the pause, not at take-control: the window is live and clickable in between.
+  The action log is created by the first captured action, so a pause nobody answered leaves no
+  empty file. A value too short to redact no longer throws inside the page binding.
+- The capture script's credential-field rule is built from `vocab.SENSITIVE_FIELD_RE`, so an OTP
+  or SSN field is masked the same way a password is.
+- `channel.close` moved into the `finally`, so a crashed run never leaves a session that looks
+  live. `ops list` marks a session whose process is gone as dead and refuses `take-control` on it.
+- The channel's transitions carry the version they read, so an expiry cannot kill a session an
+  operator took between the read and the write.
+- `ops show` opens the screenshot by default, as the brief says. Both copies of a request go
+  through the evidence writer. The writer's redactor stayed private; `run_replay` passes it to the
+  channel factory.
+- Skipped, with the reason: re-running the step's action after a hand-back when the action never
+  fired. `_StepInProgress.acted` makes it possible, but decision 20 says resume re-verifies and
+  does not act, so the text tells the operator instead. Revisit only if the demo asks for it.
+- For REPORT.md: `take-control` does not bring the window forward itself. The paused run does,
+  within one poll, because only the run's process owns the browser.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in

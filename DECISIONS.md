@@ -35,6 +35,11 @@ his behalf and confirmed it at the phase stop.
 | 25 | 2026-09-15 | 5 | Human capture records one event per click, per field left, and per navigation. No keystroke logging, and credential values are added to the redactor before anything is written. | Delegated | `HUMAN_JS`, `OperatorChannel._write_action` |
 | 26 | 2026-09-15 | 5 | Stuck discovery runs write an intervention request but cannot hand over the live session. Resuming discovery is a REPORT.md cut. | Delegated | `src/cua/discover/run.py` |
 | 27 | 2026-09-15 | 5 | Committed evidence uses a demo operator id, never a real account name, because the id lands in the session file, the request, and the result. | Delegated | evidence/README.md |
+| 29 | 2026-09-16 | 5 | A hand-back counts as a successful recovery even when the step had no checkpoint to re-verify. `reverified` keeps its narrow meaning: the checkpoint passed. | Delegated | phase 5 review, finding 1 |
+| 30 | 2026-09-16 | 5 | Taking control restarts the wait, and expiry is checked on every poll, so a paused run can never hold the browser forever. | Delegated | phase 5 review, finding 2 |
+| 31 | 2026-09-16 | 5 | Operator notes are redacted before they reach the session file, and the session file is flagged sensitive because free text can carry a secret nobody declared. | Delegated | phase 5 review, finding 3 |
+| 32 | 2026-09-16 | 5 | Losing control mid-run ends the run as `OPERATOR_ABORTED` rather than crashing. | Delegated | phase 5 review, finding 5 |
+| 33 | 2026-09-16 | 5 | Resume still never repeats the step's action, even when the action never fired. The operator is told that in the request instead. | Delegated | phase 5 review, finding 6 |
 | 28 | 2026-09-15 | 6 | `open_subaccount` discovery needs a fresh API key. The phase 3 key expired on 2026-09-14. | Shrey, pending key | phase 6 |
 
 ## Still open
