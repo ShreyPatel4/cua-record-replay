@@ -1,0 +1,39 @@
+# Evaluation licence
+
+Copyright (c) 2026 Shrey Patel. All rights reserved.
+
+This repository is a take-home submission. It is public so that it can be read, run, and
+evaluated, and for no other purpose.
+
+## You may
+
+- Read the source, the artifacts, the evidence, and the write-ups.
+- Clone the repository and run it locally, including against the mock application it contains.
+- Evaluate it as part of considering the author for a role, and discuss it internally for that
+  purpose.
+
+## You may not, without the author's written permission
+
+- Use this code, or any part of it, in a product, a service, or an internal system.
+- Incorporate any part of it into other software, whether commercial or not.
+- Redistribute, publish, sublicense, or sell it, in original or modified form.
+- Create derivative works from it, other than local changes made while evaluating it.
+- Remove or alter this notice, or the authorship recorded in the git history, the decision log,
+  or the artifacts.
+
+Reading this code and then writing your own implementation of the same ideas is not restricted.
+Ideas are not owned here. This expression of them is.
+
+No trademark rights and no patent rights are granted by this licence.
+
+## No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+All data in the mock application is synthetic. Nothing here contains real customer information.
+
+To ask for permission beyond the above, contact Shrey Patel at patelshrey77@gmail.com.

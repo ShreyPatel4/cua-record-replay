@@ -158,6 +158,13 @@ uv run pytest                              # CUA_REQUIRE_SECRET_SCAN=1 to fail i
 uvx pre-commit install                     # ruff plus the leak scan on every commit
 ```
 
+## Licence
+
+Copyright 2026 Shrey Patel. This is a take-home submission, published so it can be read, run and
+evaluated. It is not licensed for use in a product, a service, or other software. See `LICENSE`.
+Reading it and writing your own implementation of the same ideas is fine; the ideas are not owned
+here.
+
 ## Where to look
 
 | Path | What is there |
@@ -172,4 +179,5 @@ uvx pre-commit install                     # ruff plus the leak scan on every co
 | `src/cua/surface/` | The Surface seam: Playwright today, a desktop stub beside it |
 | `mock_app/` | CoreLedger and its failure injections |
 | `DECISIONS.md` | Every decision, when it was taken, and who approved it |
+| `LICENSE` | Evaluation only. Not a licence to build on |
 | `CLAUDE.md` | The working contract this was built against, kept in the repo on purpose |
