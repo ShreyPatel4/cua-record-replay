@@ -80,3 +80,27 @@ def test_scanner_is_quiet_on_clean_content(tmp_path: Path, clean: bytes) -> None
     path = tmp_path / "clean.txt"
     path.write_bytes(clean)
     assert find_leaks([path], {"PW": "planted-operator-password"}) == []
+
+
+def test_the_operator_id_never_appears_in_an_artifact_or_an_evidence_file() -> None:
+    """The operator id is an identity, not a credential: it is published in .env.example and used
+    in tests on purpose. What it must never do is survive redaction into a committed run, in any
+    encoding. A base64 form of it inside a trace POST body is exactly how it escaped once."""
+    operator = (
+        dotenv_values(ROOT / ".env").get("CORELEDGER_OPERATOR_USER")
+        if (ROOT / ".env").exists()
+        else None
+    )
+    operator = os.environ.get("CORELEDGER_OPERATOR_USER") or operator
+    if not operator:
+        if os.environ.get(REQUIRE_ENV) == "1":
+            pytest.fail("no operator id configured; set CORELEDGER_OPERATOR_USER in .env")
+        pytest.skip("no operator id configured")
+    recorded = [
+        path
+        for tracked in ("artifacts", "evidence")
+        for path in (ROOT / tracked).rglob("*")
+        if path.is_file() and "_scratch" not in path.parts
+    ]
+    assert recorded, "scan found no committed artifacts or evidence"
+    assert not find_leaks(recorded, {"operator id": operator})

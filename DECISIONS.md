@@ -41,7 +41,11 @@ his behalf and confirmed it at the phase stop.
 | 31 | 2026-09-16 | 5 | Operator notes are redacted before they reach the session file, and the session file is flagged sensitive because free text can carry a secret nobody declared. | Delegated | phase 5 review, finding 3 |
 | 32 | 2026-09-16 | 5 | Losing control mid-run ends the run as `OPERATOR_ABORTED` rather than crashing. | Delegated | phase 5 review, finding 5 |
 | 33 | 2026-09-16 | 5 | Resume still never repeats the step's action, even when the action never fired. The operator is told that in the request instead. | Delegated | phase 5 review, finding 6 |
-| 28 | 2026-09-15 | 6 | `open_subaccount` discovery needs a fresh API key. The phase 3 key expired on 2026-09-14. | Shrey, pending key | phase 6 |
+| 28 | 2026-09-16 | 6 | `open_subaccount` was discovered by a real model run against the live app, not written by hand. A wrong first goal (an account type the app does not offer) made the model give up, which is itself the stuck path working. | Shrey, key supplied | `evidence/disc_20260916T153305Z_4dd9` |
+| 35 | 2026-09-16 | 6 | `open_subaccount@1.1.0` adds ten detectors to the draft and is approved as Shrey Patel under delegation, same pattern as the read capability. | Delegated | `review_notes` in the artifact |
+| 36 | 2026-09-16 | 6 | `od_session_expired` is scoped to s06 and s07, never to s11: recovering at the create step would re-submit an irreversible POST after a session bounce, which is a human's call. | Delegated | `review_notes` in the artifact |
+| 37 | 2026-09-16 | 6 | Each rejected input gets its own VALIDATION_ERROR detector so the result can name the input the caller got wrong. | Delegated | `artifacts/coreledger.member.open_subaccount@1.1.0.capability.json` |
+| 38 | 2026-09-16 | 6 | An error tool result carries text only, with the screen beside it in the same turn. The API rejects an image inside an error result, which killed a real discovery run with a 400. | Delegated | `src/cua/discover/loop.py` |
 
 ## Still open
 

@@ -468,6 +468,29 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
 - `--escalation-timeout` is inert under `--repeat`: a stability batch is unattended by
   definition, so no operator channel is attached to its runs.
 
+## Phase 6 decisions (the irreversible capability and the write-up)
+
+- `coreledger.member.open_subaccount` was discovered by a real run, not written by hand. The first
+  attempt named an account type CoreLedger does not offer, and the model gave up rather than
+  improvising, which is the stuck path doing its job. The second attempt recorded 11 steps in 15
+  turns, with `s11` irreversible and carrying the confirm dialog's exact message.
+- Found by that run and fixed: an error tool result may not carry an image, so the screen now
+  rides beside it in the same turn. The API answers a 400 otherwise, which ended a real run.
+- `@1.1.0` adds ten detectors by hand: session expiry, app error, access denied, member not found,
+  member number rejected, three separate VALIDATION_ERROR detectors (deposit, account type,
+  nickname) so each names its own input, the maintenance notice, and the slow member page. s06's
+  wait is cut to 3 s for the same reason as the read capability.
+- `od_session_expired` is scoped to s06 and s07 only. Recovering at s11 would re-submit the
+  irreversible create after a session bounce, and that is a decision for a human.
+- Three replay evidence runs: success with `--confirm-irreversible`, `CONFIRMATION_REQUIRED`
+  without it, and `VALIDATION_ERROR` for a deposit under the minimum. Both refusal paths are
+  pinned by tests that assert the ledger is still empty afterwards.
+- README leads with the path that uses no model at all, because that is the claim being made.
+  REPORT.md uses the brief's seven headings and states the cuts with what I would build next.
+- The final leak sweep covers every tracked file plus every zip member. A new test pins that the
+  operator id, an identity rather than a credential, never survives redaction into an artifact or
+  an evidence file in any encoding.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in
