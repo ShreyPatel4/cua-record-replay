@@ -387,6 +387,41 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
   injection reads as nondeterministic there; the 3 s profile wait held under CPU load in the
   review but is not proven on a slower CI machine.
 
+## Phase 5 decisions (escalation and handoff)
+
+- The escalation hook returns one of three things: a hard failure (`no_operator`, nobody on call),
+  an escalated stop carrying `intervention_path`, or a `Handback` when an operator took the live
+  session and gave it back. A hand-back unwinds to the step loop through `_HandedBack`, so the
+  re-verification lives in one place instead of at every escalation site.
+- Resume re-runs the step's in-scope detectors and re-verifies its checkpoint. It never repeats
+  the action: the human works on the same screen and may already have done it by hand. A step
+  whose wait is a settle or a URL change gets one detector pass instead, and its
+  `HumanIntervention.reverified` is false, because there is nothing to check again.
+- A stop raised while re-verifying belongs to that hand-back: it is reported as
+  `POST_HANDOFF_CHECKPOINT_FAILED` with the underlying message, and it moves the session
+  `resuming -> paused_for_human` with a new intervention, which is the brief's own arrow.
+- `MAX_HUMAN_PAUSES` is 3. A run that keeps coming back to a human is not converging, so it stops
+  asking and ends escalated with the last request. The cap is logged as `escalation_capped`.
+- `cua replay --escalation-timeout` is the wait in seconds (default 300). 0 attaches no operator
+  channel at all, which is the phase 4 behaviour and what an unattended caller with nobody on call
+  wants. A pause nobody answers expires, and the run ends escalated, exit 3.
+- Control is a file, not a flag: `session_state.json` in the run's evidence directory. The surface
+  calls `file_control(path)` before every act and every read, so while a human holds the session
+  automation raises `NotInControl`. No file means no pause has ever happened and automation owns
+  the session. The ops CLI is a separate process and only ever writes that file.
+- Human action capture is one event per click, per field left, per navigation, never per
+  keystroke. Values reach the sink raw, so the sink redacts: a value typed into a field that looks
+  like a credential is added to the redactor before anything is written, and
+  `human_actions.jsonl` is flagged sensitive.
+- The paused run polls the state file and prints the pause banner to stderr, so stdout stays the
+  caller's JSON result.
+- A stuck discovery run writes an `intervention.json` (kind `discovery`) with the screen attached,
+  but the live session is not handed over. Resuming discovery means carrying the model's context
+  across the handoff, which is a different problem from replay's re-verification. That is a
+  REPORT.md cut with one line on what it would take.
+- The operator id comes from `--operator`, `$CUA_OPERATOR`, or `$USER`. It lands in the session
+  file, the request, and the result, so committed evidence uses a demo id, not a real account.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in
