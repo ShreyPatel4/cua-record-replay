@@ -56,13 +56,79 @@ def _paused(root: Path, run_id: str = "replay_demo", pid: int | None = None) -> 
             {
                 "intervention_id": "iv_01",
                 "run_id": run_id,
+                "kind": "replay",
+                "capability_id": "coreledger.member.read_savings_balance",
                 "reason_code": "HARD_FAILURE_ESCALATE",
+                "reason_text": "The server returned its 500 page.",
+                "current_url": "http://127.0.0.1:5050/members/*0007",
                 "step_id": "s06",
                 "screenshot_path": "intervention_01.png",
+                "a11y_snapshot_path": "a11y_intervention_01.json",
+                "suggested_actions": ["Clear whatever is blocking it, then hand back."],
+                "resume_command": f"uv run cua ops take-control {run_id}",
+                "requested_at": "2026-09-16T19:17:42Z",
+                "expires_at": "2026-09-16T19:47:42Z",
             }
         )
     )
     return store
+
+
+def test_ops_show_tells_the_operator_what_the_run_could_see(tmp_path: Path) -> None:
+    """Section 3.6 asks the request to carry enough context to act on it. The accessibility
+    snapshot is the run's own perception, so showing it shows what the run was looking at."""
+    store = _paused(tmp_path)
+    run_dir = store.path.parent
+    (run_dir / "a11y_intervention_01.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"ref": "e1", "role": "document", "name": "", "text": "", "frame_path": []},
+                    {
+                        "ref": "f2e1",
+                        "role": "heading",
+                        "name": "Internal Server Error",
+                        "text": "",
+                        "frame_path": ["main"],
+                    },
+                ],
+                "frame_urls": {"": "http://127.0.0.1:5050/", "main": "http://127.0.0.1:5050/x"},
+            }
+        )
+    )
+    (run_dir / "human_actions.jsonl").write_text(
+        json.dumps(
+            {
+                "at": "2026-09-16T19:19:08.000Z",
+                "event": "input",
+                "frame_url": "http://127.0.0.1:5050/x",
+                "target_role": "text",
+                "target_name": "Member number",
+                "target_text": None,
+                "value": "*0007",
+            }
+        )
+        + "\n"
+    )
+    shown = runner.invoke(
+        app, ["ops", "show", "replay_demo", "--evidence-root", str(tmp_path), "--no-open"]
+    )
+    assert shown.exit_code == 0
+    assert "Internal Server Error" in shown.output, "the screen the run stopped on"
+    assert "http://127.0.0.1:5050/x" in shown.output, "which frame it was in"
+    assert "Member number" in shown.output, "what the human has already done"
+    assert "*0007" in shown.output, "their typed value, as redacted on the way in"
+    assert "ops take-control" in shown.output, "how to take it"
+    assert "HARD_FAILURE_ESCALATE" in shown.output
+
+
+def test_ops_show_can_still_hand_a_tool_the_raw_request(tmp_path: Path) -> None:
+    _paused(tmp_path)
+    shown = runner.invoke(
+        app, ["ops", "show", "replay_demo", "--evidence-root", str(tmp_path), "--json"]
+    )
+    assert shown.exit_code == 0
+    assert json.loads(shown.output)["intervention_id"] == "iv_01"
 
 
 def test_the_ops_commands_walk_a_session_from_paused_to_resuming(tmp_path: Path) -> None:

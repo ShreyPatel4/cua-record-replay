@@ -94,7 +94,7 @@ stopped on, and waits without touching the browser:
 
 ```sh
 uv run cua ops list                        # runs waiting for a human
-uv run cua ops show <run_id>               # the request, and the screenshot
+uv run cua ops show <run_id>               # why it stopped, what it saw, what a human has done
 uv run cua ops take-control <run_id>       # the browser is yours; replay is locked out
 uv run cua ops hand-back <run_id> --note "what you did"
 uv run cua ops abort <run_id>              # end it as escalated

@@ -203,7 +203,9 @@ Image redaction of screenshots. The manifest flags what to delete instead. Next:
 accessibility boxes of nodes whose text matched a sensitive pattern at capture time, since the
 surface already has both the boxes and the matches.
 
-A remote operator console. Control transfer is real, but the operator has to be at this machine.
+A remote operator console. Control transfer is real and `cua ops show` prints what the run could
+see when it stopped, from the same accessibility snapshot the automation itself perceives, but the
+operator has to be at this machine to act.
 Next: a CDP screencast or noVNC view and a queue that assigns requests, keyed on the intervention
 id that already exists.
 

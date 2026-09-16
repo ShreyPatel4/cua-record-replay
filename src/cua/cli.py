@@ -447,6 +447,31 @@ def ops_list(evidence_root: EvidenceRootOption = Path("evidence/_scratch")) -> N
         )
 
 
+def _screen_lines(snapshot: dict[str, object]) -> list[str]:
+    """What the run could see when it stopped, in the order a person reads a screen.
+
+    The accessibility snapshot is the automation's own perception, so showing it is showing the
+    operator what the run was looking at, not a second guess at it.
+    """
+    nodes = snapshot.get("nodes")
+    frames = snapshot.get("frame_urls")
+    lines: list[str] = []
+    if isinstance(frames, dict):
+        for path, url in frames.items():
+            lines.append(f"    frame {path or 'top':8} {url}")
+    if not isinstance(nodes, list):
+        return lines
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        said = str(node.get("name") or node.get("text") or "").strip()
+        if not said:
+            continue
+        where = "/".join(str(part) for part in node.get("frame_path") or []) or "top"
+        lines.append(f"    {where:8} {node.get('role') or ''!s:10} {said[:70]}")
+    return lines
+
+
 @ops_app.command("show")
 def ops_show(
     run_id: str,
@@ -457,23 +482,62 @@ def ops_show(
             "--open/--no-open", help="Open the screenshot in the default viewer. On by default."
         ),
     ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="The raw request, for a tool rather than a person.")
+    ] = False,
 ) -> None:
-    """Print the open intervention request for a run."""
+    """Show why a run stopped, what it was looking at, and what a human has done so far."""
     import json
     import subprocess
     import sys
 
     path, state = _session(run_id, evidence_root)
-    request_file = path.parent / "intervention.json"
+    run_dir = path.parent
+    request_file = run_dir / "intervention.json"
     if not request_file.exists():
         typer.echo(f"{run_id} is {state.phase} and has no intervention request", err=True)
         raise typer.Exit(code=1)
     request = json.loads(request_file.read_text(encoding="utf-8"))
-    typer.echo(json.dumps({**request, "phase": state.phase}, indent=2))
-    shot = path.parent / str(request.get("screenshot_path") or "")
-    if open_screenshot and shot.is_file():
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.run([opener, str(shot)], check=False)  # noqa: S603
+    if as_json:
+        typer.echo(json.dumps({**request, "phase": state.phase}, indent=2))
+        return
+
+    held = f" held by {state.operator_id}" if state.operator_id else ""
+    typer.echo(f"run {run_id}  {state.phase}{held}")
+    typer.echo(f"  capability {request.get('capability_id') or request.get('goal')}")
+    typer.echo(f"  stopped at {request.get('step_id')}: {request.get('reason_code')}")
+    typer.echo(f"  because    {request.get('reason_text', '')}")
+    typer.echo(f"  url        {request.get('current_url', '')}")
+    typer.echo(f"  expires    {request.get('expires_at', '')}")
+
+    snapshot_file = run_dir / str(request.get("a11y_snapshot_path") or "")
+    if snapshot_file.is_file():
+        typer.echo("\n  what the run could see:")
+        for line in _screen_lines(json.loads(snapshot_file.read_text(encoding="utf-8"))):
+            typer.echo(line)
+
+    actions_file = run_dir / "human_actions.jsonl"
+    if actions_file.is_file():
+        done = [json.loads(line) for line in actions_file.read_text().splitlines() if line.strip()]
+        if done:
+            typer.echo(f"\n  what a human has done in this window ({len(done)} actions):")
+            for action in done[-8:]:
+                target = action.get("target_name") or action.get("target_role") or ""
+                value = f" value={action['value']}" if action.get("value") else ""
+                typer.echo(f"    {action['at'][11:19]} {action['event']:9} {target[:28]}{value}")
+
+    if request.get("suggested_actions"):
+        typer.echo("\n  what you might do:")
+        for hint in request["suggested_actions"]:
+            typer.echo(f"    - {hint}")
+    typer.echo(f"\n  {request.get('resume_command', '')}")
+
+    shot = run_dir / str(request.get("screenshot_path") or "")
+    if shot.is_file():
+        typer.echo(f"  screenshot {shot}")
+        if open_screenshot:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.run([opener, str(shot)], check=False)  # noqa: S603
 
 
 @ops_app.command("take-control")

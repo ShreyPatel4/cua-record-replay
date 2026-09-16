@@ -40,7 +40,9 @@ at the keyboard. Two terminals, about a minute.
 4. The run signs in, looks up the member, hits the 500 page, and stops. It prints the pause to
    stderr with the run id and the exact command to take the session. Copy that command.
 5. Terminal 3: `uv run cua ops list --evidence-root evidence/_scratch` shows the run as
-   `paused_for_human`, then run the take-control command it printed. The browser window comes to
+   `paused_for_human`. `uv run cua ops show <run_id> --evidence-root evidence/_scratch` prints why
+   it stopped, the screen it could see when it stopped, and anything a human has already done in
+   that window. Then run the take-control command it printed. The browser window comes to
    the front and is yours; replay will not touch it.
 6. In the browser, fix what the automation could not. The injection was armed once and is already
    spent, so look the member up again: type the member number into Member number and click Find.
