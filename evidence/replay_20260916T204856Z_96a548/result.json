@@ -1,0 +1,95 @@
+{
+  "status": "recovered_then_success",
+  "capability_id": "coreledger.member.read_savings_balance",
+  "capability_version": "1.1.0",
+  "tenant": null,
+  "run_id": "replay_20260916T204856Z_96a548",
+  "started_at": "2026-09-16T20:48:56.354360Z",
+  "duration_ms": 206956,
+  "inputs": {
+    "member_number": "*0007"
+  },
+  "outputs": {
+    "savings_balance": "[REDACTED]"
+  },
+  "outcome_code": null,
+  "message": null,
+  "field_errors": [],
+  "step_reached": "s06",
+  "expected": null,
+  "observed": null,
+  "steps": [
+    {
+      "step_id": "s01",
+      "action": "navigate",
+      "resolved_rung": null,
+      "resolved_strategy": null,
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 380
+    },
+    {
+      "step_id": "s02",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 356
+    },
+    {
+      "step_id": "s03",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 386
+    },
+    {
+      "step_id": "s04",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 265
+    },
+    {
+      "step_id": "s05",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 346
+    },
+    {
+      "step_id": "s06",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "text_exact",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 204743
+    }
+  ],
+  "recoveries": [
+    {
+      "type": "human",
+      "step_id": "s06",
+      "intervention_id": "iv_01",
+      "reason_code": "HARD_FAILURE_ESCALATE",
+      "outcome": "handed_back",
+      "operator_id": "[REDACTED]",
+      "operator_note": "looked the member up again by hand after the 500",
+      "human_action_count": 8,
+      "reverified": true,
+      "taken_at": "2026-09-16T20:49:01.820040Z",
+      "handed_back_at": "2026-09-16T20:52:23.519285Z"
+    }
+  ],
+  "warnings": [],
+  "evidence_dir": "evidence/_scratch/replay_20260916T204856Z_96a548",
+  "intervention_path": null
+}

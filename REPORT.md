@@ -156,6 +156,11 @@ unrun, so the intervention text tells the operator that in as many words. If re-
 the run pauses again with a new request, and after three pauses it stops asking and ends escalated:
 a run that keeps coming back is not converging.
 
+One identity is deliberately not redacted: `session_state.json` names the operator who took
+control. Who held the session is the point of a control-transfer audit trail. The result handed
+back to the calling agent masks it, because the agent has no business knowing which member of
+staff intervened.
+
 Mocked: the operator's view, which is the real browser window on this machine rather than a remote
 view with a request queue and per-operator audit. Real: the control transfer, the lock, the
 capture, the re-verification, and a result that names who held the session, their note and how many

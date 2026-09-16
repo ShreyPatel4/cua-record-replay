@@ -17,6 +17,7 @@ has a `manifest.json` listing its files with a sha256 and a `sensitive` flag.
 | `replay_20260916T161438Z_707b48/` | The irreversible capability replayed: `success`, exit 0, one sub-account created and its number returned. `--confirm-irreversible` is what allows `s11`; the policy `coreledger-subaccount` rates that click irreversible from its text and from the confirm dialog it answers. The run uses `@2.0.0`, the second review of the draft. `result.json` masks the number, the caller gets it on stdout. | `uv run cua replay coreledger.member.open_subaccount -i member_number=10007 -i "account_type=Holiday Club" -i "nickname=Vacation fund" -i initial_deposit=25.00 --confirm-irreversible --evidence-root evidence` |
 | `replay_20260916T161443Z_234baf/` | The same command without `--confirm-irreversible`: `hard_failure` `CONFIRMATION_REQUIRED`, exit 2, at `s11`. The gate names the rule that made the click irreversible and the message says which flag would allow it. The run creates nothing, and a browser test asserts an empty ledger for the same command. | the success command, minus `--confirm-irreversible` |
 | `replay_20260916T161448Z_c1dd90/` | `business_outcome` `VALIDATION_ERROR`, exit 0: CoreLedger refuses a deposit under $5.00. The form comes back with the values still in it, nothing is created, and the result names the input (`initial_deposit`) with the app's own message. An answer, not a failure. | the success command with `-i initial_deposit=1.00` |
+| `replay_20260916T204856Z_96a548/` | The handoff, with a real person in it (brief section 3.6). `app_error` was armed once, so the member page returned CoreLedger's 500; `od_app_error` classified it and the run paused instead of guessing. An operator took the live session with `cua ops take-control`, looked the member up again by hand in the same browser window, and handed it back with a note. Replay re-ran the outcome detectors, re-verified `cp_member_profile`, and carried on to read the balance, without repeating the step the human had just done. `session_state.json` holds the whole transfer: `stuck_detected`, `take_control`, `hand_back`, `checkpoint_reverified`, `finish`. `human_actions.jsonl` holds the eight actions they took, redacted (the member number they typed is `*0007`). Status `recovered_then_success`, exit 0. | `uv run cua mock inject app_error --param on=detail --times 1`, then the success command with `--headed`, then `cua ops take-control`, the lookup by hand, and `cua ops hand-back --note "..."` |
 | `stability_20260916T161607Z_d9e325/` | `--repeat 5`: five successes, the same rung for every step in every run, equal output digests, `determinism: deterministic`, durations 2150 to 2253 ms. The five runs sit inside the directory next to `stability.json`. | `uv run cua replay coreledger.member.read_savings_balance -i member_number=10007 --repeat 5 --evidence-root evidence` |
 
 The replay runs need CoreLedger running with the operator credentials in `.env` (`uv run cua mock
@@ -85,8 +86,13 @@ file from inside the paused run's own poll.
   on (`intervention_NN.png`, `a11y_intervention_NN.json`), why, and the take-control command.
   `interventions.jsonl` keeps every request from a run that paused more than once.
 - `session_state.json`: who held the live browser and every transition between them, with the
-  operator's own note. It is flagged sensitive: notes are free text, and redaction only masks the
-  secrets it knows about.
+  operator's own note. This is the one place an identity is written in the clear, on purpose: who
+  took control of a session is the point of a control-transfer audit trail, and a result that says
+  `[REDACTED]` tells an auditor nothing. The result the caller gets masks it instead, because a
+  calling agent has no business knowing which member of staff intervened. The file is flagged
+  sensitive: notes are free text, and redaction only masks the secrets it knows about. In the
+  committed handoff run the operator id happens to match the app's own sign-in user, because the
+  demo uses one identity for both; in production they are different accounts.
 - `human_actions.jsonl`: what a human did while they held the session, one line per click, per
   field they left, and per navigation. Values are redacted, and anything typed into a field that
   looks like a credential is masked and added to the redactor before the line is written, so it

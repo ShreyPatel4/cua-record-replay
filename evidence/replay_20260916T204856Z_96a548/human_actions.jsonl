@@ -1,0 +1,8 @@
+{"at": "2026-09-16T20:51:59.870+00:00", "event": "click", "frame_url": "http://127.0.0.1:5050/members/*0007", "target_role": "body", "target_name": null, "target_text": "Internal Server Error\n\nCoreLedger encountered an unexpected condition and could ", "value": null}
+{"at": "2026-09-16T20:52:03.599+00:00", "event": "click", "frame_url": "http://127.0.0.1:5050/banner", "target_role": "a", "target_name": null, "target_text": "Member search", "value": null}
+{"at": "2026-09-16T20:52:03.677+00:00", "event": "navigate", "frame_url": "http://127.0.0.1:5050/members/search", "target_role": null, "target_name": null, "target_text": null, "value": null}
+{"at": "2026-09-16T20:52:05.875+00:00", "event": "click", "frame_url": "http://127.0.0.1:5050/members/search", "target_role": "text", "target_name": null, "target_text": null, "value": null}
+{"at": "2026-09-16T20:52:07.480+00:00", "event": "change", "frame_url": "http://127.0.0.1:5050/members/search", "target_role": "text", "target_name": null, "target_text": null, "value": "*0007"}
+{"at": "2026-09-16T20:52:08.969+00:00", "event": "input", "frame_url": "http://127.0.0.1:5050/members/search", "target_role": "text", "target_name": null, "target_text": null, "value": "*0007"}
+{"at": "2026-09-16T20:52:09.077+00:00", "event": "click", "frame_url": "http://127.0.0.1:5050/members/search", "target_role": "span", "target_name": null, "target_text": "Find", "value": null}
+{"at": "2026-09-16T20:52:09.131+00:00", "event": "navigate", "frame_url": "http://127.0.0.1:5050/members/*0007", "target_role": null, "target_name": null, "target_text": null, "value": null}

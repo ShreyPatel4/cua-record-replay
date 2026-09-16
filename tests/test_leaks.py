@@ -21,6 +21,7 @@ from support import ROOT, candidate_files, find_leaks
 SECRET_KEYS = ("CORELEDGER_OPERATOR_PASSWORD", "ANTHROPIC_API_KEY")
 # An identity is redacted as a whole token, so it has to be distinguishable from ordinary words.
 _DISTINCT_ID = re.compile(r"[0-9-]")
+SESSION_FILE = "session_state.json"
 MIN_SECRET_LEN = 8
 # Pre-commit sets this so a machine with no secrets configured cannot pass the scan vacuously.
 REQUIRE_ENV = "CUA_REQUIRE_SECRET_SCAN"
@@ -108,7 +109,36 @@ def test_the_operator_id_never_appears_in_an_artifact_or_an_evidence_file() -> N
         path
         for tracked in ("artifacts", "evidence")
         for path in (ROOT / tracked).rglob("*")
-        if path.is_file() and "_scratch" not in path.parts
+        if path.is_file() and "_scratch" not in path.parts and path.name != SESSION_FILE
     ]
     assert recorded, "scan found no committed artifacts or evidence"
     assert not find_leaks(recorded, {"operator id": operator})
+
+
+def test_a_session_file_names_its_operators_and_redacts_everything_else(tmp_path: Path) -> None:
+    """Who took control of a session is the point of a control-transfer audit trail, so the
+    session file names them. Everything else in it, including the free text an operator types
+    into a note, goes through redaction on the way in."""
+    operator = os.environ.get("CORELEDGER_OPERATOR_USER") or (
+        dotenv_values(ROOT / ".env").get("CORELEDGER_OPERATOR_USER")
+        if (ROOT / ".env").exists()
+        else None
+    )
+    if not operator:
+        pytest.skip("no operator id configured")
+    sessions = [
+        path for path in (ROOT / "evidence").rglob(SESSION_FILE) if "_scratch" not in path.parts
+    ]
+    if not sessions:
+        pytest.skip("no committed run had a human in it")
+    for path in sessions:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        took = [r for r in state["history"] if r["event"] == "take_control"]
+        # A pause nobody answered names nobody, which is the honest record of what happened.
+        assert all(r.get("operator_id") for r in took), f"{path} has a takeover by nobody"
+        stripped = json.dumps(
+            {**state, "history": [{**r, "operator_id": None} for r in state["history"]]}
+        )
+        copy = tmp_path / path.parent.name
+        copy.write_text(stripped, encoding="utf-8")
+        assert not find_leaks([copy], {"operator id": operator}), f"{path} outside operator_id"

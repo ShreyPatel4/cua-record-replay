@@ -1,0 +1,58 @@
+{
+  "run_id": "replay_20260916T204856Z_96a548",
+  "kind": "replay",
+  "phase": "finished",
+  "controller": "nobody",
+  "version": 5,
+  "updated_at": "2026-09-16T20:52:23.697700Z",
+  "owner_pid": 55518,
+  "operator_id": null,
+  "intervention_id": null,
+  "history": [
+    {
+      "from_phase": "running",
+      "to_phase": "paused_for_human",
+      "event": "stuck_detected",
+      "actor": "automation",
+      "operator_id": null,
+      "at": "2026-09-16T20:48:59.129200Z",
+      "note": "The server returned its 500 page. A human can often clear the cause and send the run on."
+    },
+    {
+      "from_phase": "paused_for_human",
+      "to_phase": "human_active",
+      "event": "take_control",
+      "actor": "operator",
+      "operator_id": "teller-0417",
+      "at": "2026-09-16T20:49:01.820040Z",
+      "note": ""
+    },
+    {
+      "from_phase": "human_active",
+      "to_phase": "resuming",
+      "event": "hand_back",
+      "actor": "operator",
+      "operator_id": "teller-0417",
+      "at": "2026-09-16T20:52:23.290680Z",
+      "note": "looked the member up again by hand after the 500"
+    },
+    {
+      "from_phase": "resuming",
+      "to_phase": "running",
+      "event": "checkpoint_reverified",
+      "actor": "automation",
+      "operator_id": null,
+      "at": "2026-09-16T20:52:23.565451Z",
+      "note": ""
+    },
+    {
+      "from_phase": "running",
+      "to_phase": "finished",
+      "event": "finish",
+      "actor": "automation",
+      "operator_id": null,
+      "at": "2026-09-16T20:52:23.697700Z",
+      "note": "run finished as recovered_then_success"
+    }
+  ]
+}
