@@ -10,7 +10,7 @@ import secrets as token
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -34,7 +34,18 @@ from cua.policy.gate import PolicyGate
 from cua.policy.models import load_policy
 from cua.policy.redact import Redactor
 from cua.replay.conditions import holds
+from cua.session.intervention import InterventionRequest, ReasonCode
 from cua.surface.playwright import PlaywrightSurface
+
+# The brief's stuck detectors for discovery. A model error or a dead entry page is a broken run,
+# not a screen a human can do anything with, so those get no request.
+STUCK_REASONS: dict[str, ReasonCode] = {
+    "gave_up": "GAVE_UP",
+    "max_steps": "MAX_STEPS",
+    "timeout": "TIMEOUT",
+    "repeated_action": "REPEATED_ACTION",
+    "no_progress": "NO_PROGRESS",
+}
 
 ConfirmParams = Callable[[list[ParamProposal]], list[ParamProposal]]
 EXTRA_SECRET_ENV = ("ANTHROPIC_API_KEY",)
@@ -99,6 +110,11 @@ class DiscoveryResult(ResultModel):
     capability: str | None = Field(description="id@version of the saved draft.")
     artifact_path: str | None = Field(description="Where the draft was saved.")
     evidence_dir: str = Field(description="This run's evidence directory.")
+    intervention_path: str | None = Field(
+        default=None,
+        description="Intervention request written when the run stopped stuck, so a human can see "
+        "the screen it gave up on. Discovery does not hand the live session over; that is replay.",
+    )
 
 
 def _secret_values(specs: Sequence[SecretSpec], environ: Mapping[str, str]) -> dict[str, Secret]:
@@ -175,6 +191,55 @@ def run_discovery(
         finally:
             surface.close()
 
+    def _stuck_intervention(
+        outcome: DiscoveryOutcome, surface: PlaywrightSurface, message: str
+    ) -> str | None:
+        """A stuck discovery run leaves the request a human would read, with the screen attached.
+
+        The live session is not handed over: resuming discovery means replaying the model's
+        context across the handoff, which is a different problem from replay's re-verification.
+        """
+        reason = STUCK_REASONS.get(outcome.stop_reason)
+        if reason is None:
+            return None
+        raised = datetime.now(UTC)
+        try:
+            snapshot = surface.snapshot()
+            shot = evidence.screenshot(
+                "intervention.png", surface.screenshot(), page_urls=snapshot.frame_urls.values()
+            )
+            a11y = evidence.snapshot("a11y_intervention.json", snapshot, mask_amounts=True)
+            url = surface.frame_url([])
+        except Exception:
+            shot, a11y, url = "", "", ""
+        for name in (shot, a11y):
+            if name:
+                evidence.flag_sensitive(name)
+        raised_request = InterventionRequest(
+            intervention_id=f"iv_{run_id}",
+            run_id=run_id,
+            kind="discovery",
+            goal=redactor.text(request.goal),
+            step_id=f"turn_{outcome.turns:02d}",
+            reason_code=reason,
+            reason_text=message,
+            current_url=redactor.text(url),
+            screenshot_path=shot,
+            a11y_snapshot_path=a11y,
+            suggested_actions=[
+                "Read the screen the model stopped on and decide whether the goal is reachable.",
+                "Discovery cannot be resumed: change the goal or the app, then record again.",
+            ],
+            resume_command=f"uv run cua discover --goal ... # this run ({run_id}) cannot resume",
+            requested_at=raised,
+            expires_at=raised + timedelta(hours=1),
+        )
+        evidence.write_json("intervention.json", raised_request.model_dump(mode="json"))
+        evidence.event(
+            "discovery", "intervention_raised", reason_code=reason, step_id=raised_request.step_id
+        )
+        return str(evidence.dir / "intervention.json")
+
     def _conclude(outcome: DiscoveryOutcome, surface: PlaywrightSurface) -> DiscoveryResult:
         base = {
             "run_id": run_id,
@@ -194,15 +259,17 @@ def run_discovery(
             status = (
                 "failed" if outcome.stop_reason in ("model_error", "entry_failed") else "stopped"
             )
+            message = redactor.free_text(outcome.message)
             return DiscoveryResult(
                 **base,
                 status=status,
-                message=redactor.free_text(outcome.message),
+                message=message,
                 steps_recorded=0,
                 outputs=[],
                 parameters=[],
                 capability=None,
                 artifact_path=None,
+                intervention_path=_stuck_intervention(outcome, surface, message),
             )
 
         def keep_final_screen() -> None:

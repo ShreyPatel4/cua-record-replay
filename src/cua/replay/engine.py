@@ -50,6 +50,7 @@ from cua.replay.result import (
     AutomaticRecovery,
     DriftWarning,
     FieldError,
+    HumanIntervention,
     OutputValue,
     RecoveryRecord,
     ReplayResult,
@@ -121,6 +122,8 @@ class RunStopped(Exception):
         status: StopStatus = "hard_failure",
         field_errors: tuple[FieldError, ...] = (),
         intervention_path: str | None = None,
+        step_id: str = "",
+        recoveries: tuple[RecoveryRecord, ...] = (),
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -130,11 +133,40 @@ class RunStopped(Exception):
         self.status = status
         self.field_errors = field_errors
         self.intervention_path = intervention_path
+        # The step the run was on, filled in when the stop reaches an escalation handler, and what
+        # that handler wants recorded: a pause nobody answered is still a recovery record.
+        self.step_id = step_id
+        self.recoveries = recoveries
+
+
+@dataclass
+class Handback:
+    """An operator took the session and gave it back. The engine re-verifies the interrupted step
+    instead of acting again, because the human may already have done the step by hand.
+
+    confirm reports what re-verification found and returns the record for the result: ok says
+    automation may carry on, reverified says the step's own checkpoint passed.
+    """
+
+    intervention: HumanIntervention
+    intervention_path: str
+    confirm: Callable[[bool, bool], HumanIntervention]
+
+
+class _HandedBack(Exception):
+    """Unwinds out of the step that paused, so run() can re-verify in one place."""
+
+    def __init__(self, handback: Handback) -> None:
+        super().__init__(handback.intervention.intervention_id)
+        self.handback = handback
 
 
 # An escalation handler gets the stop that asked for a human and why, and returns how the run
-# ends: an escalated stop carrying its intervention_path, or a hard failure when nobody can come.
-Escalation = Callable[[RunStopped, ReasonCode], RunStopped]
+# ends: an escalated stop carrying its intervention_path, a hard failure when nobody can come, or
+# a Handback when an operator fixed the screen and returned control.
+Escalation = Callable[[RunStopped, ReasonCode], "RunStopped | Handback"]
+# A run that keeps coming back to a human is not converging; stop asking after this many pauses.
+MAX_HUMAN_PAUSES = 3
 
 
 def no_operator(stop: RunStopped, reason: ReasonCode) -> RunStopped:
@@ -164,6 +196,9 @@ class _StepInProgress:
     started: float
     attempts: int = 0
     resolved: Resolved | None = None
+    # Whether the step's own action reached the app. A pause before it (an irreversible step under
+    # escalate handling) and a pause after it both resume the same way, but the log says which.
+    acted: bool = False
 
 
 class ReplayEngine:
@@ -213,6 +248,9 @@ class ReplayEngine:
         self._index = 1
         self._reached: str | None = None
         self._current: _StepInProgress | None = None
+        self._pauses = 0
+        self._reverifying = False
+        self._intervention_path: str | None = None
         self._records: list[StepRecord] = []
         self._recoveries: list[RecoveryRecord] = []
         self._attempts: dict[tuple[str, str], int] = {}
@@ -247,8 +285,8 @@ class ReplayEngine:
         )
         try:
             for index, step in enumerate(self._cap.steps, start=1):
-                self._run_step(step, index=index)
-            outputs = self._finish()
+                self._step_with_handbacks(step, index)
+            outputs = self._finish_with_handbacks()
         except RunStopped as stop:
             self._record_unfinished_step()
             self._capture(failed=True)
@@ -304,6 +342,89 @@ class ReplayEngine:
 
     # ---- steps ----------------------------------------------------------------------------------
 
+    def _step_with_handbacks(self, step: Step, index: int) -> None:
+        """Run a step, and keep re-verifying it for as long as operators hand control back.
+
+        A hand-back never repeats the step's action: the human works on the same screen, so acting
+        again could submit twice. Instead the step's in-scope detectors run again and its
+        checkpoint is re-verified, exactly as the brief's resuming state says.
+        """
+        handed: _HandedBack | None = None
+        try:
+            self._run_step(step, index=index)
+        except _HandedBack as paused:
+            handed = paused
+        while handed is not None:
+            handed = self._reverify(step, handed.handback)
+
+    def _reverify(self, step: Step, handback: Handback) -> _HandedBack | None:
+        """Check the screen the operator left behind. None when the run may carry on, another
+        hand-back when the check failed and an operator took the session again."""
+        progress = self._current
+        checkpoint = isinstance(step.wait_for, CheckpointWait)
+        self._log(
+            "handback_received",
+            step_id=step.id,
+            intervention=handback.intervention.intervention_id,
+            operator=handback.intervention.operator_id,
+            acted_before_pause=progress.acted if progress else True,
+            reverifying=step.wait_for.kind if checkpoint else "detectors_only",
+        )
+        self._reverifying = True
+        try:
+            if checkpoint:
+                self._wait(step)
+            else:
+                self._detectors_once(step)
+        except RunStopped as stop:
+            # The hand-back owns this stop; from here on a fresh escalation is allowed again.
+            self._reverifying = False
+            self._recoveries.append(handback.confirm(False, False))
+            failed = RunStopped(
+                "POST_HANDOFF_CHECKPOINT_FAILED",
+                f"step {step.id} still does not verify after the hand-back: {stop.message}",
+                expected=stop.expected,
+                observed=stop.observed,
+            )
+            try:
+                raise self._escalate(failed, "POST_HANDOFF_CHECKPOINT_FAILED")
+            except _HandedBack as again:
+                return again
+        finally:
+            self._reverifying = False
+        self._recoveries.append(handback.confirm(True, checkpoint))
+        if progress is not None:
+            self._records.append(self._step_record(progress, passed=True))
+            self._current = None
+            self._capture(failed=False)
+        return None
+
+    def _finish_with_handbacks(self) -> dict[str, OutputValue]:
+        """The success check and the outputs, with the same hand-back loop the steps get: the
+        success step can escalate too, and a human may fix the screen it reads from."""
+        last = self._steps_by_id[self._success_step]
+        while True:
+            try:
+                return self._finish()
+            except _HandedBack as paused:
+                handed: _HandedBack | None = paused
+                while handed is not None:
+                    handed = self._reverify(last, handed.handback)
+
+    def _detectors_once(self, step: Step) -> None:
+        """One pass of a step's in-scope detectors, for a step whose wait cannot be run again (a
+        settle that already happened, a URL that already changed)."""
+        opened: dict[str, _OpenRecovery] = {}
+        try:
+            self._raise_on_events(step)
+            detector = self._matching(step)
+            if detector is not None:
+                self._handle(step, detector, opened)
+        except RunStopped:
+            self._close(step, opened, succeeded=False)
+            raise
+        self._close(step, opened, succeeded=True)
+
     def _run_step(self, step: Step, *, index: int | None = None, skip_wait: bool = False) -> None:
         """A step from the flow (index given) or one re-run by a recovery (index None)."""
         rerun = index is None
@@ -343,6 +464,7 @@ class ReplayEngine:
                 )
             act = self._perform(step.id, action, step.risk)
             if act.ok:
+                progress.acted = True
                 break
             # At most once for anything irreversible or dialog-answering: a failed act may still
             # have reached the server.
@@ -473,8 +595,33 @@ class ReplayEngine:
         return self._escalate(stop, "HARD_FAILURE_ESCALATE") if step.on_fail == "escalate" else stop
 
     def _escalate(self, stop: RunStopped, reason: ReasonCode) -> RunStopped:
-        self._log("escalation_requested", code=stop.code, reason=reason)
-        return self._escalation(stop, reason)
+        """Ask for a human. Returns the stop that ends the run, or raises _HandedBack when an
+        operator took the session and gave it back for the engine to re-verify."""
+        if self._reverifying:
+            # A stop raised while re-verifying a hand-back belongs to that hand-back: the caller
+            # reports it as the post-handoff failure rather than as a fresh escalation.
+            return stop
+        self._log("escalation_requested", code=stop.code, reason=reason, pauses=self._pauses)
+        if self._pauses >= MAX_HUMAN_PAUSES:
+            self._log("escalation_capped", code=stop.code, reason=reason, pauses=self._pauses)
+            return RunStopped(
+                stop.code,
+                f"{stop.message} The run paused for a human {self._pauses} times without "
+                "finishing, so it stops rather than asking again.",
+                expected=stop.expected,
+                observed=stop.observed,
+                status="escalated" if self._intervention_path else "hard_failure",
+                intervention_path=self._intervention_path,
+            )
+        self._pauses += 1
+        stop.step_id = stop.step_id or self._reached or ""
+        outcome = self._escalation(stop, reason)
+        if isinstance(outcome, Handback):
+            self._intervention_path = outcome.intervention_path
+            raise _HandedBack(outcome)
+        self._recoveries.extend(outcome.recoveries)
+        self._intervention_path = outcome.intervention_path or self._intervention_path
+        return outcome
 
     # ---- targets --------------------------------------------------------------------------------
 

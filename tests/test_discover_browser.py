@@ -330,6 +330,29 @@ def test_two_actions_that_change_nothing_stop_the_run_as_stuck(
     assert list(Path(result.evidence_dir).glob("a11y_*.json"))
 
 
+def test_a_stuck_discovery_run_leaves_an_intervention_for_a_human(
+    tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
+) -> None:
+    """Discovery stops when the model gives up, and writes the request a human would read. It
+    does not hand the live session over: only replay can be resumed."""
+    give_up: Move = lambda s: ("give_up", {"reason": "the member number field is not here"})  # noqa: E731
+    result, _, _ = _discover(tmp_path, coreledger, mock_settings, browser, [give_up])
+    assert (result.status, result.stop_reason) == ("stopped", "gave_up")
+    assert result.intervention_path
+    request = json.loads(Path(result.intervention_path).read_text())
+    assert (request["kind"], request["reason_code"]) == ("discovery", "GAVE_UP")
+    assert request["capability_id"] is None
+    assert request["goal"]
+    assert request["step_id"].startswith("turn_")
+    run_dir = Path(result.evidence_dir)
+    assert (run_dir / request["screenshot_path"]).is_file()
+    assert (run_dir / request["a11y_snapshot_path"]).is_file()
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    flagged = {f["path"] for f in manifest["files"] if f["sensitive"]}
+    assert {request["screenshot_path"], request["a11y_snapshot_path"]} <= flagged
+    assert (run_dir / "session_state.json").exists() is False
+
+
 def test_an_invalid_call_is_answered_and_the_run_continues(
     tmp_path: Path, coreledger: RunningMockApp, mock_settings: MockSettings, browser: Browser
 ) -> None:

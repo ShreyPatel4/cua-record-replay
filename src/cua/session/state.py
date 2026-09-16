@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import fcntl
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +51,10 @@ TRANSITIONS: dict[tuple[Phase, Event], Phase] = {
     ("resuming", "checkpoint_reverified"): "running",
     ("resuming", "reverify_failed"): "paused_for_human",
     ("resuming", "abort"): "finished",
+    # A run can end while a pause is open or half-resumed: it gave up asking, or it crashed after
+    # the hand-back. Automation still has to record that nothing holds the session any more.
+    ("paused_for_human", "finish"): "finished",
+    ("resuming", "finish"): "finished",
 }
 
 # Which actor may fire which event. The operator can never resume automation without a hand-back.
@@ -195,6 +199,22 @@ def advance(
     )
 
 
+def file_control(path: Path) -> Callable[[], None]:
+    """The control hook a surface calls before it acts or reads.
+
+    No file means no human has ever been involved in this run, so automation owns the session.
+    Once a pause has written one, every act reads it: the ops CLI is another process, and the only
+    thing the two agree on is this file.
+    """
+    store = StateStore(path)
+
+    def check() -> None:
+        if path.exists():
+            require_automation(store.read())
+
+    return check
+
+
 def require_automation(state: SessionState) -> None:
     if state.controller != "automation":
         raise NotInControl(
@@ -243,6 +263,7 @@ class StateStore:
         note: str = "",
         intervention_id: str | None = None,
         operator_id: str | None = None,
+        now: datetime | None = None,
     ) -> SessionState:
         with self._locked():
             current = self.read()
@@ -257,6 +278,7 @@ class StateStore:
                 note=note,
                 intervention_id=intervention_id,
                 operator_id=operator_id,
+                now=now,
             )
             self._write(updated)
             return updated

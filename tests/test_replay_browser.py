@@ -24,9 +24,18 @@ from playwright.sync_api import Browser
 
 from cua.artifact.catalog import dump_json
 from cua.artifact.schema import Capability
+from cua.evidence.writer import EvidenceWriter
 from cua.policy.redact import REDACTED
-from cua.replay.result import AutomaticRecovery, DriftWarning, MoneyValue, ReplayResult
+from cua.replay.result import (
+    AutomaticRecovery,
+    DriftWarning,
+    HumanIntervention,
+    MoneyValue,
+    ReplayResult,
+)
 from cua.replay.run import ReplayRequest, run_replay, run_stability
+from cua.session.operator import OperatorChannel
+from cua.session.state import StateStore
 from cua.surface.playwright import PlaywrightSurface
 from mock_app.server import RunningMockApp
 from mock_app.settings import MockSettings
@@ -76,7 +85,11 @@ class Replayer:
     open_surface: Callable[[], PlaywrightSurface]
 
     def run(
-        self, member: str, capability: Capability | None = None, **request: Any
+        self,
+        member: str,
+        capability: Capability | None = None,
+        open_escalation: Any = None,
+        **request: Any,
     ) -> ReplayResult:
         chosen = capability or self.capability
         fields: dict[str, Any] = {
@@ -88,7 +101,10 @@ class Replayer:
         }
         fields.update(request)
         result = run_replay(
-            ReplayRequest(**fields), environ=self.environ, open_surface=self.open_surface
+            ReplayRequest(**fields),
+            environ=self.environ,
+            open_surface=self.open_surface,
+            open_escalation=open_escalation,
         )
         assert result.contract_problems(chosen) == []
         return result
@@ -117,7 +133,7 @@ def replayer(
             "CORELEDGER_OPERATOR_PASSWORD": mock_settings.operator_password,
         },
         evidence_root=tmp_path / "evidence",
-        open_surface=lambda: CookieKeepingSurface.launch(browser, control=lambda: None),
+        open_surface=lambda control: CookieKeepingSurface.launch(browser, control=control),
     )
 
 
@@ -456,11 +472,11 @@ def test_the_cli_exits_zero_for_not_found_and_two_for_a_hard_failure(
     env = {k: v for k, v in os.environ.items() if not k.startswith("CORELEDGER_")}
     env.update(replayer.environ)
 
-    def cli(member: str) -> tuple[int, dict[str, Any]]:
+    def cli(member: str, *extra: str) -> tuple[int, dict[str, Any]]:
         argv = [sys.executable, "-m", "cua.cli", "replay", str(artifact), "--allow-draft"]
         argv += ["-i", f"member_number={member}", "--evidence-root", str(workdir / "evidence")]
         done = subprocess.run(  # noqa: S603
-            argv, cwd=workdir, env=env, capture_output=True, text=True, check=False
+            [*argv, *extra], cwd=workdir, env=env, capture_output=True, text=True, check=False
         )
         return done.returncode, json.loads(done.stdout)
 
@@ -470,8 +486,47 @@ def test_the_cli_exits_zero_for_not_found_and_two_for_a_hard_failure(
         "business_outcome",
         "MEMBER_NOT_FOUND",
     )
-    code, body = cli("10013")
+    # No operator channel: the escalating detector ends the run as a hard failure that keeps
+    # its code, which is what an unattended caller with nobody on call gets.
+    code, body = cli("10013", "--escalation-timeout", "0")
     assert (code, body["status"], body["outcome_code"]) == (2, "hard_failure", "PERMISSION_DENIED")
+
+
+def test_the_cli_exits_three_when_a_pause_expires_with_no_operator(
+    replayer: Replayer, tmp_path: Path
+) -> None:
+    """An escalating detector with an operator channel attached pauses the run and waits. Nobody
+    takes it, so the request expires and the caller gets escalated, exit 3, with the request."""
+    workdir = tmp_path / "cli_escalated"
+    (workdir / "policy").mkdir(parents=True)
+    shutil.copy(replayer.policy_file, workdir / "policy" / "allowlist.yaml")
+    artifact = workdir / "read_balance.capability.json"
+    artifact.write_text(dump_json(replayer.capability))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CORELEDGER_")}
+    env.update(replayer.environ)
+    argv = [sys.executable, "-m", "cua.cli", "replay", str(artifact), "--allow-draft"]
+    argv += ["-i", "member_number=10013", "--evidence-root", str(workdir / "evidence")]
+    argv += ["--escalation-timeout", "2"]
+    done = subprocess.run(  # noqa: S603
+        argv, cwd=workdir, env=env, capture_output=True, text=True, check=False
+    )
+    body = json.loads(done.stdout)
+    assert (done.returncode, body["status"], body["outcome_code"]) == (
+        3,
+        "escalated",
+        "PERMISSION_DENIED",
+    )
+    request = Path(body["intervention_path"])
+    assert request.is_file()
+    written = json.loads(request.read_text())
+    assert written["reason_code"] == "HARD_FAILURE_ESCALATE"
+    assert written["resume_command"].startswith("uv run cua ops take-control")
+    assert (request.parent / written["screenshot_path"]).is_file()
+    assert (request.parent / written["a11y_snapshot_path"]).is_file()
+    state = json.loads((request.parent / "session_state.json").read_text())
+    assert (state["phase"], state["controller"]) == ("finished", "nobody")
+    assert [r["outcome"] for r in body["recoveries"]] == ["expired"]
+    assert (request.parent / "trace.zip").is_file()
 
 
 def test_an_output_that_does_not_parse_fails_without_leaking_the_balance(
@@ -497,4 +552,84 @@ def test_an_output_that_does_not_parse_fails_without_leaking_the_balance(
     assert "4210.55" not in snapshot
     assert _manifest(result)["a11y_06.json"] is True
     assert {"step_06.png", "step_06_failure.png", "trace.zip"} <= {p.name for p in _files(result)}
+    _assert_no_secrets(result, mock_settings)
+
+
+def test_a_human_takes_the_live_session_fixes_the_app_and_hands_it_back(
+    replayer: Replayer, inject: Injector, mock_settings: MockSettings
+) -> None:
+    """The whole handoff on the real app: the 500 page escalates, an operator takes the session,
+    reloads the member by hand the way a person would, and hands it back. Replay re-verifies the
+    checkpoint rather than clicking Find again, and the run finishes with the balance.
+
+    The operator runs inside the paused run's own poll, so the test needs no second thread; every
+    transition still goes through the same session file the ops CLI writes.
+    """
+    inject("app_error", on="detail", times=1)
+    holder: dict[str, Any] = {}
+
+    def open_escalation(evidence: EvidenceWriter, surface: Any) -> OperatorChannel:
+        store = StateStore(evidence.dir / "session_state.json")
+        holder["store"] = store
+
+        def operator(ms: int) -> None:
+            surface.wait(ms)
+            if not store.path.exists():
+                return
+            phase = store.read().phase
+            if phase == "paused_for_human":
+                store.transition("take_control", "operator", operator_id="teller-9")
+            elif phase == "human_active":
+                # What a person would do: the automation is locked out, so this goes straight to
+                # the page, past the gate and past the surface's own act path.
+                frame = next(f for f in surface.page.frames if "/members/" in f.url)
+                frame.goto(frame.url)
+                store.transition(
+                    "hand_back",
+                    "operator",
+                    operator_id="teller-9",
+                    note="reloaded the member page after the 500",
+                )
+
+        return OperatorChannel(
+            run_id=evidence.run_id,
+            capability_id=replayer.capability.capability.id,
+            evidence=evidence,
+            surface=surface,
+            redactor=evidence.redactor,
+            resume_command=lambda run: f"uv run cua ops take-control {run}",
+            wait_s=20.0,
+            sleep=operator,
+            announce=lambda _text: None,
+        )
+
+    result = replayer.run("10007", open_escalation=open_escalation)
+    assert (result.status, result.exit_code) == ("recovered_then_success", 0)
+    assert result.outputs == {"savings_balance": BALANCE_10007}
+    human = result.recoveries[-1]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.reverified, human.operator_id) == ("handed_back", True, "teller-9")
+    assert human.operator_note == "reloaded the member page after the 500"
+    assert human.step_id == "s06"
+    assert human.human_action_count >= 1, "the human's own navigation was captured"
+
+    run_dir = Path(result.evidence_dir)
+    actions = [
+        json.loads(line)
+        for line in (run_dir / "human_actions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert [a["event"] for a in actions] == ["navigate"] * len(actions)
+    assert all("/members/" in a["frame_url"] for a in actions)
+    state = json.loads((run_dir / "session_state.json").read_text())
+    assert state["phase"] == "finished"
+    assert [h["event"] for h in state["history"]] == [
+        "stuck_detected",
+        "take_control",
+        "hand_back",
+        "checkpoint_reverified",
+        "finish",
+    ]
+    steps = [(s["step_id"], s["passed"]) for s in result.model_dump(mode="json")["steps"]]
+    assert steps.count(("s06", True)) == 1, "the step the human finished is not run twice"
     _assert_no_secrets(result, mock_settings)

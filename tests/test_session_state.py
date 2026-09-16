@@ -19,6 +19,7 @@ from cua.session.state import (
     StaleState,
     StateStore,
     advance,
+    file_control,
     require_automation,
 )
 
@@ -200,3 +201,28 @@ def test_intervention_request_shape() -> None:
         InterventionRequest.model_validate(
             _intervention(expires_at=datetime(2026, 9, 12, 14, 0, tzinfo=UTC))
         )
+
+
+def test_file_control_locks_automation_out_while_a_human_holds_the_session(tmp_path: Path) -> None:
+    """The control hook every surface calls before it acts. The run and the ops CLI are separate
+    processes, so the file is the only thing they both see."""
+    path = tmp_path / "run" / "session_state.json"
+    control = file_control(path)
+    # No session file yet: nobody has ever paused this run, so automation owns it.
+    control()
+
+    store = StateStore(path)
+    store.create(SessionState.start("r", "replay"))
+    control()
+
+    store.transition("stuck_detected", "automation", intervention_id="iv_01")
+    with pytest.raises(NotInControl, match="paused_for_human"):
+        control()
+
+    store.transition("take_control", "operator", operator_id="teller-9")
+    with pytest.raises(NotInControl, match="controller is human"):
+        control()
+
+    store.transition("hand_back", "operator", operator_id="teller-9")
+    # Resuming: automation may act again, and re-verifies the step before carrying on.
+    control()

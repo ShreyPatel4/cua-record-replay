@@ -5,7 +5,7 @@ It exists so the seam is real: the artifact, resolver, recorder, and replay engi
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NoReturn
 
@@ -17,6 +17,7 @@ from cua.surface.base import (
     ActResult,
     DialogGuard,
     Element,
+    HumanEvent,
     Observation,
     RequestGuard,
     SurfaceEvent,
@@ -92,6 +93,15 @@ class DesktopSurface:
         self._unbuilt()
 
     def session_tokens(self) -> list[str]:
+        self._unbuilt()
+
+    def bring_to_front(self) -> None:
+        self._unbuilt()
+
+    def start_human_capture(self, sink: Callable[[HumanEvent], None]) -> None:
+        self._unbuilt()
+
+    def stop_human_capture(self) -> None:
         self._unbuilt()
 
     def candidates(self, rung: Rung, frame_path: Sequence[str]) -> list[Element]:

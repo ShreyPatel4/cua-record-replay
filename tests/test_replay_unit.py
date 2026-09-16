@@ -9,10 +9,10 @@ import base64
 import json
 import re
 import zipfile
-from collections.abc import Sequence
-from datetime import UTC, datetime
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote_plus
 
 import pytest
@@ -28,10 +28,12 @@ from cua.policy.gate import PolicyGate
 from cua.policy.models import load_policy
 from cua.policy.redact import REDACTED, Redactor
 from cua.replay.engine import ReplayEngine, RunStopped, no_operator
-from cua.replay.result import AutomaticRecovery, ReplayResult
-from cua.replay.run import ReplayRequest, ReplaySurface, run_replay
+from cua.replay.result import AutomaticRecovery, HumanIntervention, ReplayResult
+from cua.replay.run import Control, ReplayRequest, ReplaySurface, run_replay
 from cua.session.intervention import ReasonCode
-from cua.surface.base import A11ySnapshot, Action, ActResult, Element, SurfaceEvent
+from cua.session.operator import OperatorChannel
+from cua.session.state import StateStore
+from cua.surface.base import A11ySnapshot, Action, ActResult, Element, HumanEvent, SurfaceEvent
 
 from support import ROOT, find_leaks
 
@@ -295,7 +297,7 @@ def _elsewhere_policy(tmp_path: Path) -> Path:
     return path
 
 
-def _never_opened() -> ReplaySurface:
+def _never_opened(control: Control) -> ReplaySurface:
     raise AssertionError("a pre-run refusal must not open a browser")
 
 
@@ -842,7 +844,7 @@ def _poll_request(tmp_path: Path) -> ReplayRequest:
 def test_a_crash_still_leaves_a_result_file(tmp_path: Path) -> None:
     surface = CrashingSurface(FakeClock())
     with pytest.raises(RuntimeError, match="trace backend gone"):
-        run_replay(_poll_request(tmp_path), environ={}, open_surface=lambda: surface)
+        run_replay(_poll_request(tmp_path), environ={}, open_surface=lambda _control: surface)
     (run_dir,) = tmp_path.iterdir()
     assert json.loads((run_dir / "result.json").read_text())["status"] == "crashed"
 
@@ -852,7 +854,7 @@ def test_a_trace_that_cannot_be_scrubbed_is_dropped_and_the_failure_stands(tmp_p
     result = run_replay(
         _poll_request(tmp_path),
         environ={},
-        open_surface=lambda: surface,
+        open_surface=lambda _control: surface,
         clock=lambda s: surface.clock,
     )
     assert (result.status, result.outcome_code, result.exit_code) == (
@@ -898,3 +900,212 @@ def test_the_approved_profile_wait_keeps_the_slow_recovery_reachable() -> None:
     assert isinstance(slow, Recoverable)
     assert isinstance(slow.recovery, WaitRetryRecovery)
     assert wait < DEFAULT_SLOW_MS < wait + slow.recovery.max_total_ms
+
+
+class FakeOperator:
+    """An operator, driven from inside the paused run's own poll so no test needs a thread.
+
+    The channel sleeps between looks at the state file; this is that sleep, and it takes the
+    session, optionally fixes the app the way a human would, and hands back or aborts.
+    """
+
+    def __init__(
+        self,
+        store: StateStore,
+        clock: FakeClock,
+        *,
+        fix: Callable[[], None] | None = None,
+        aborts: bool = False,
+        answers: bool = True,
+        who: str = "teller-9",
+        note: str = "cleared the notice by hand",
+    ) -> None:
+        self.store = store
+        self.clock = clock
+        self.fix = fix
+        self.aborts = aborts
+        self.answers = answers
+        self.who = who
+        self.note = note
+        self.takes = 0
+
+    def __call__(self, ms: int) -> None:
+        self.clock.sleep(ms)
+        if not self.answers or not self.store.path.exists():
+            return
+        state = self.store.read()
+        at = NOW + timedelta(seconds=self.clock.t)
+        if state.phase == "paused_for_human":
+            self.takes += 1
+            self.store.transition("take_control", "operator", operator_id=self.who, now=at)
+        elif state.phase == "human_active":
+            if self.aborts:
+                self.store.transition(
+                    "abort", "operator", operator_id=self.who, note="not fixable", now=at
+                )
+                return
+            if self.fix is not None:
+                self.fix()
+            self.store.transition(
+                "hand_back", "operator", operator_id=self.who, note=self.note, now=at
+            )
+
+
+def _with_operator(
+    tmp_path: Path,
+    capability: Capability,
+    ready_at: float | None,
+    *,
+    operator: Callable[[StateStore, FakeClock, ScriptedSurface], FakeOperator],
+    wait_s: float = 30.0,
+) -> tuple[ReplayResult, ScriptedSurface, list[dict[str, Any]], StateStore]:
+    clock = FakeClock()
+    surface = ScriptedSurface(clock, ready_at)
+    evidence = EvidenceWriter(tmp_path, "replay_probe", Redactor())
+    store = StateStore(evidence.dir / "session_state.json")
+    driver = operator(store, clock, surface)
+    channel = OperatorChannel(
+        run_id="replay_probe",
+        capability_id=capability.capability.id,
+        evidence=evidence,
+        surface=cast(Any, surface),
+        redactor=Redactor(),
+        resume_command=lambda run: f"uv run cua ops take-control {run}",
+        wait_s=wait_s,
+        poll_ms=250,
+        sleep=driver,
+        now=lambda: NOW + timedelta(seconds=clock.t),
+        announce=lambda _text: None,
+    )
+    gate = PolicyGate(load_policy(POLICY_FILE, "coreledger-readonly"))
+    result = ReplayEngine(
+        capability,
+        surface,
+        GatedSurface(surface, surface, gate),
+        inputs={},
+        masked_inputs={},
+        secrets={},
+        redactor=Redactor(),
+        evidence=evidence,
+        run_id="replay_probe",
+        started_at=NOW,
+        clock=clock,
+        escalation=channel,
+    ).run()
+    channel.close(result.status)
+    lines = (evidence.dir / "run.jsonl").read_text().splitlines()
+    return result, surface, [json.loads(line) for line in lines], store
+
+
+def test_a_hand_back_re_verifies_the_step_instead_of_acting_again(tmp_path: Path) -> None:
+    """The human fixes the screen and gives the session back. Replay checks the checkpoint rather
+    than repeating the step, because the human may already have done it by hand."""
+
+    def script(store: StateStore, clock: FakeClock, surface: ScriptedSurface) -> FakeOperator:
+        def fix() -> None:
+            surface.ready_at = clock.t
+
+        return FakeOperator(store, clock, fix=fix)
+
+    result, surface, events, store = _with_operator(
+        tmp_path, _capability([DOWN]), ready_at=None, operator=script
+    )
+    assert result.status == "recovered_then_success"
+    assert surface.acts == ["navigate"], "the step ran once; the hand-back did not repeat it"
+    assert [r.model_dump()["type"] for r in result.recoveries] == ["human"]
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.reverified, human.operator_id) == ("handed_back", True, "teller-9")
+    assert human.operator_note == "cleared the notice by hand"
+    assert [e["event"] for e in events if e["event"] == "handback_received"]
+    assert store.read().phase == "finished"
+    assert (Path(result.evidence_dir) / "intervention.json").is_file()
+
+
+def test_an_operator_who_aborts_ends_the_run_as_escalated_with_the_request(tmp_path: Path) -> None:
+    result, _, _, store = _with_operator(
+        tmp_path,
+        _capability([DOWN]),
+        ready_at=None,
+        operator=lambda store, clock, _s: FakeOperator(store, clock, aborts=True),
+    )
+    assert (result.status, result.outcome_code, result.exit_code) == ("escalated", "APP_DOWN", 3)
+    assert result.intervention_path
+    assert result.intervention_path.endswith("intervention.json")
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.operator_id) == ("aborted", "teller-9")
+    assert store.read().phase == "finished"
+
+
+def test_a_pause_nobody_answers_expires_and_the_run_escalates(tmp_path: Path) -> None:
+    result, _, events, store = _with_operator(
+        tmp_path,
+        _capability([DOWN]),
+        ready_at=None,
+        operator=lambda store, clock, _s: FakeOperator(store, clock, answers=False),
+        wait_s=5.0,
+    )
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    assert [e["event"] for e in events if e["event"] == "intervention_expired"]
+    human = result.recoveries[0]
+    assert isinstance(human, HumanIntervention)
+    assert (human.outcome, human.taken_at) == ("expired", None)
+    assert store.read().phase == "finished"
+
+
+def test_a_hand_back_that_does_not_fix_the_screen_pauses_again_then_gives_up(
+    tmp_path: Path,
+) -> None:
+    """Re-verification failing is the brief's resuming to paused_for_human arrow. It carries a new
+    request, and a run that keeps coming back stops asking instead of ping-ponging forever."""
+    result, _, events, _ = _with_operator(
+        tmp_path,
+        _capability([DOWN]),
+        ready_at=None,
+        operator=lambda store, clock, _s: FakeOperator(store, clock, fix=None),
+    )
+    assert (result.status, result.exit_code) == ("escalated", 3)
+    assert result.message
+    assert "paused for a human" in result.message
+    raised = [e for e in events if e["event"] == "intervention_raised"]
+    assert [e["intervention_id"] for e in raised] == ["iv_01", "iv_02", "iv_03"]
+    assert [e["reason_code"] for e in raised[1:]] == ["POST_HANDOFF_CHECKPOINT_FAILED"] * 2
+    assert [e["event"] for e in events if e["event"] == "escalation_capped"]
+    outcomes = [r.model_dump()["outcome"] for r in result.recoveries]
+    assert outcomes == ["handed_back", "handed_back", "handed_back"]
+    lines = (Path(result.evidence_dir) / "interventions.jsonl").read_text().splitlines()
+    assert len(lines) == 3, "every request is kept, not just the last"
+
+
+def test_what_a_human_types_is_redacted_before_it_reaches_the_evidence(tmp_path: Path) -> None:
+    """The capture sink sees raw keystroke values. A password typed by hand must not survive."""
+    evidence = EvidenceWriter(tmp_path, "replay_capture", Redactor())
+    channel = OperatorChannel(
+        run_id="replay_capture",
+        capability_id="coreledger.member.poll_probe",
+        evidence=evidence,
+        surface=cast(Any, ScriptedSurface(FakeClock(), None)),
+        redactor=Redactor(),
+        resume_command=lambda run: run,
+    )
+    channel._begin_capture()
+    channel._write_action(
+        HumanEvent(
+            kind="input",
+            frame_url=URL,
+            role="password",
+            name="Password",
+            value="hunter2-operator-secret",
+            credential_field=True,
+        )
+    )
+    channel._write_action(
+        HumanEvent(kind="click", frame_url=URL, role="cell", name="Find", text="Find")
+    )
+    channel._end_capture()
+    written = (evidence.dir / "human_actions.jsonl").read_text()
+    assert "hunter2-operator-secret" not in written
+    assert "[REDACTED]" in written
+    assert '"event": "click"' in written
+    assert not find_leaks(evidence.dir.rglob("*"), {"typed": "hunter2-operator-secret"})

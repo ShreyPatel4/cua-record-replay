@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast
@@ -49,6 +50,7 @@ from cua.surface.base import (
     EventKind,
     ExpectedDialog,
     FrameNotFound,
+    HumanEvent,
     Navigate,
     Observation,
     PressKey,
@@ -94,6 +96,64 @@ DOWNLOAD_JS = """(() => {
     install(this);
     return result;
   };
+})();"""
+# Installed while a human holds the session: what they click, type, and choose, reported out of
+# the page. Values leave the page raw, so only a redacting sink may write them down.
+HUMAN_JS = """(() => {
+  const install = (doc) => {
+    if (doc.__cuaHumanCapture) return;
+    doc.__cuaHumanCapture = true;
+    const nameOf = (el) => {
+      const aria = el.getAttribute && el.getAttribute("aria-label");
+      if (aria) return aria;
+      const labelled = el.getAttribute && el.getAttribute("aria-labelledby");
+      if (labelled) {
+        const by = doc.getElementById(labelled);
+        if (by) return (by.innerText || by.textContent || "").trim();
+      }
+      if (el.labels && el.labels.length) return (el.labels[0].innerText || "").trim();
+      const placeholder = el.getAttribute && el.getAttribute("placeholder");
+      if (placeholder) return placeholder;
+      const title = el.getAttribute && el.getAttribute("title");
+      return title || "";
+    };
+    const roleOf = (el) => {
+      const explicit = el.getAttribute && el.getAttribute("role");
+      if (explicit) return explicit;
+      const tag = (el.tagName || "").toLowerCase();
+      if (tag === "input") return (el.getAttribute("type") || "text").toLowerCase();
+      return tag;
+    };
+    const secret = (el, name) => {
+      const type = (el.getAttribute && el.getAttribute("type") || "").toLowerCase();
+      const attrs = [name, el.name || "", el.id || ""].join(" ");
+      return type === "password" || /pass|pin|secret|token/i.test(attrs);
+    };
+    const report = (kind, el, value) => {
+      if (!window.__cuaHuman || !el) return;
+      const name = nameOf(el) || "";
+      const text = (el.innerText || el.textContent || "").trim().slice(0, 120);
+      window.__cuaHuman({
+        kind: kind,
+        url: doc.location ? doc.location.href : "",
+        role: roleOf(el),
+        name: name,
+        text: text,
+        value: value === undefined ? null : value,
+        credential: secret(el, name),
+      });
+    };
+    doc.addEventListener("click", (e) => report("click", e.target), true);
+    doc.addEventListener("change", (e) => report("change", e.target, e.target.value), true);
+    // One event per field, when they leave it: keystroke-by-keystroke would be a keylogger.
+    doc.addEventListener("focusout", (e) => {
+      const el = e.target;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+        report("input", el, el.value);
+      }
+    }, true);
+  };
+  install(document);
 })();"""
 POLL_MS = 50
 # An act that can start a navigation stays open until no request has started for this long, capped,
@@ -155,6 +215,8 @@ class PlaywrightSurface:
         self._status: dict[Frame, int] = {}
         self._synthetic: dict[str, Element] = {}
         self._tracing = False
+        self._human_sink: Callable[[HumanEvent], None] | None = None
+        self._human_installed = False
         context.add_init_script(MUTATION_JS)
         context.add_init_script(DOWNLOAD_JS)
         context.expose_binding("__cuaDownloadBlocked", self._on_download_blocked)
@@ -280,7 +342,15 @@ class PlaywrightSurface:
         if request.resource_type == "document" and request not in self._answered_by_guard:
             self._status[response.frame] = response.status
 
+    def _report_human_navigation(self, frame: Frame) -> None:
+        sink = self._human_sink
+        if sink is not None:
+            sink(HumanEvent(kind="navigate", frame_url=frame.url))
+
     def _on_frame_navigated(self, frame: Frame) -> None:
+        sink = self._human_sink
+        if sink is not None:
+            sink(HumanEvent(kind="navigate", frame_url=frame.url))
         scheme = urlsplit(frame.url).scheme
         if scheme not in _PAGE_SCHEMES and self._automation_holds_control():
             self._emit("navigation_off_policy", f"frame loaded a {scheme}: document", frame.url)
@@ -598,6 +668,48 @@ class PlaywrightSurface:
 
     def session_tokens(self) -> list[str]:
         return [c["value"] for c in self._context.cookies() if c.get("value")]
+
+    # ---- human capture --------------------------------------------------------------------------
+
+    def bring_to_front(self) -> None:
+        with suppress(PlaywrightError):
+            self.page.bring_to_front()
+
+    def start_human_capture(self, sink: Callable[[HumanEvent], None]) -> None:
+        """Listen in the page while a human works. The binding is installed once per context and
+        stays; it reports nothing while no sink is set."""
+        self._human_sink = sink
+        if not self._human_installed:
+            self._context.expose_binding("__cuaHuman", self._on_human_event)
+            self._context.add_init_script(HUMAN_JS)
+            self._human_installed = True
+        # add_init_script only reaches documents loaded from now on; the operator starts on a page
+        # that is already open, so its frames are instrumented directly.
+        for frame in self.page.frames:
+            with suppress(PlaywrightError):
+                frame.evaluate(HUMAN_JS)
+
+    def stop_human_capture(self) -> None:
+        self._human_sink = None
+
+    def _on_human_event(self, source: dict[str, Any], payload: dict[str, Any]) -> None:
+        sink = self._human_sink
+        if sink is None:
+            return
+        kind = str(payload.get("kind", "click"))
+        if kind not in ("click", "input", "change", "navigate", "dialog"):
+            return
+        sink(
+            HumanEvent(
+                kind=cast(Any, kind),
+                frame_url=str(payload.get("url", "")),
+                role=payload.get("role") or None,
+                name=payload.get("name") or None,
+                text=payload.get("text") or None,
+                value=payload.get("value") or None,
+                credential_field=bool(payload.get("credential")),
+            )
+        )
 
     def _quiet_ms(self) -> float:
         quiet = float("inf")

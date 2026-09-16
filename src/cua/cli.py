@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from cua.artifact.schema import Capability
     from cua.discover.record import SecretSpec
     from cua.discover.run import ConfirmParams
+    from cua.session.state import SessionState
 
 ARTIFACTS_DIR = Path("artifacts")
 POLICY_FILE = Path("policy/allowlist.yaml")
@@ -228,6 +229,14 @@ def replay(
         bool, typer.Option(help="Allow irreversible steps under confirm handling.")
     ] = False,
     headed: Annotated[bool, typer.Option()] = False,
+    escalation_timeout: Annotated[
+        float,
+        typer.Option(
+            min=0,
+            help="Seconds a paused run waits for an operator. 0 attaches no operator channel, so "
+            "an escalation ends the run as a hard failure.",
+        ),
+    ] = 300.0,
     evidence_root: Annotated[Path, typer.Option(help="Where run directories go.")] = Path(
         "evidence/_scratch"
     ),
@@ -243,7 +252,16 @@ def replay(
 
     from playwright.sync_api import sync_playwright
 
-    from cua.replay.run import ReplayRequest, run_replay, run_stability, stability_summary
+    from cua.evidence.writer import EvidenceWriter
+    from cua.replay.run import (
+        Control,
+        ReplayRequest,
+        ReplaySurface,
+        run_replay,
+        run_stability,
+        stability_summary,
+    )
+    from cua.session.operator import OperatorChannel
     from cua.surface.playwright import PlaywrightSurface
 
     if expect not in ("success", "business_outcome"):
@@ -263,11 +281,31 @@ def replay(
         chromium = pw.chromium.launch(headless=not headed)
         try:
 
-            def open_surface() -> PlaywrightSurface:
-                return PlaywrightSurface.launch(chromium, control=lambda: None)
+            def open_surface(control: "Control") -> PlaywrightSurface:
+                return PlaywrightSurface.launch(chromium, control=control)
+
+            def open_escalation(
+                evidence: "EvidenceWriter", surface: "ReplaySurface"
+            ) -> OperatorChannel:
+                return OperatorChannel(
+                    run_id=evidence.run_id,
+                    capability_id=capability.capability.id,
+                    evidence=evidence,
+                    surface=surface,
+                    redactor=evidence.redactor,
+                    resume_command=lambda run: (
+                        f"uv run cua ops take-control {run} --evidence-root {evidence_root}"
+                    ),
+                    wait_s=escalation_timeout,
+                )
 
             if repeat == 1:
-                result = run_replay(request, environ=os.environ, open_surface=open_surface)
+                result = run_replay(
+                    request,
+                    environ=os.environ,
+                    open_surface=open_surface,
+                    open_escalation=open_escalation if escalation_timeout > 0 else None,
+                )
                 typer.echo(result.model_dump_json(indent=2))
                 code = result.exit_code
             else:
@@ -289,36 +327,171 @@ def replay(
     raise typer.Exit(code=code)
 
 
+EvidenceRootOption = Annotated[
+    Path, typer.Option("--evidence-root", help="Where run directories live.")
+]
+OperatorOption = Annotated[
+    str | None, typer.Option("--operator", help="Who you are. Defaults to $CUA_OPERATOR or $USER.")
+]
+
+
+def _operator_id(given: str | None) -> str:
+    """The id that lands in the session file, the intervention, and the result."""
+    import os
+
+    who = given or os.environ.get("CUA_OPERATOR") or os.environ.get("USER") or "operator"
+    return who.strip() or "operator"
+
+
+def _sessions(root: Path) -> "list[tuple[Path, SessionState]]":
+    """Every run under the evidence root that has a session file, newest first."""
+    from cua.session.state import SessionState
+
+    found = []
+    for path in sorted(root.glob("*/session_state.json")) + sorted(
+        root.glob("*/*/session_state.json")
+    ):
+        try:
+            found.append((path, SessionState.model_validate_json(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            continue
+    return sorted(found, key=lambda pair: pair[1].updated_at, reverse=True)
+
+
+def _session(run_id: str, root: Path) -> "tuple[Path, SessionState]":
+    for path, state in _sessions(root):
+        if state.run_id == run_id or path.parent.name == run_id:
+            return path, state
+    typer.echo(f"no session for run {run_id!r} under {root}", err=True)
+    raise typer.Exit(code=1)
+
+
+def _act_on(
+    run_id: str,
+    root: Path,
+    event: str,
+    actor: str,
+    *,
+    operator: str | None = None,
+    note: str = "",
+) -> None:
+    """One transition on one run's session file, with the errors an operator can act on."""
+    from typing import cast
+
+    from cua.session.state import (
+        Actor,
+        Event,
+        IllegalTransition,
+        NotInControl,
+        StaleState,
+        StateStore,
+    )
+
+    path, state = _session(run_id, root)
+    try:
+        updated = StateStore(path).transition(
+            cast(Event, event),
+            cast(Actor, actor),
+            expected_version=state.version,
+            operator_id=operator,
+            note=note,
+        )
+    except (IllegalTransition, NotInControl) as exc:
+        typer.echo(f"{run_id} is {state.phase}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except StaleState as exc:
+        typer.echo(f"{run_id} changed while you were reading it: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{run_id}: {state.phase} -> {updated.phase} (controller {updated.controller})")
+
+
 @ops_app.command("list")
-def ops_list() -> None:
-    """Show runs paused for a human."""
-    _not_yet("ops list", 5)
+def ops_list(evidence_root: EvidenceRootOption = Path("evidence/_scratch")) -> None:
+    """Show runs with a session, paused ones first."""
+    rows = _sessions(evidence_root)
+    if not rows:
+        typer.echo(f"no sessions under {evidence_root}")
+        return
+    waiting = [r for r in rows if r[1].phase in ("paused_for_human", "human_active", "resuming")]
+    for path, state in waiting + [r for r in rows if r not in waiting]:
+        held = f" held by {state.operator_id}" if state.operator_id else ""
+        typer.echo(
+            f"{state.run_id}  {state.phase:<16} controller={state.controller:<10}"
+            f" updated={state.updated_at:%H:%M:%S}{held}  {path.parent}"
+        )
 
 
 @ops_app.command("show")
-def ops_show(run_id: str) -> None:
-    """Print an intervention request and open its screenshot."""
-    _not_yet("ops show", 5)
+def ops_show(
+    run_id: str,
+    evidence_root: EvidenceRootOption = Path("evidence/_scratch"),
+    open_screenshot: Annotated[
+        bool, typer.Option("--open", help="Open the screenshot in the default viewer.")
+    ] = False,
+) -> None:
+    """Print the open intervention request for a run."""
+    import json
+    import subprocess
+    import sys
+
+    path, state = _session(run_id, evidence_root)
+    request_file = path.parent / "intervention.json"
+    if not request_file.exists():
+        typer.echo(f"{run_id} is {state.phase} and has no intervention request", err=True)
+        raise typer.Exit(code=1)
+    request = json.loads(request_file.read_text(encoding="utf-8"))
+    typer.echo(json.dumps({**request, "phase": state.phase}, indent=2))
+    shot = path.parent / str(request.get("screenshot_path") or "")
+    if open_screenshot and shot.is_file():
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([opener, str(shot)], check=False)  # noqa: S603
 
 
 @ops_app.command("take-control")
-def ops_take_control(run_id: str) -> None:
-    """Take the live session from automation and start capturing human actions."""
-    _not_yet("ops take-control", 5)
+def ops_take_control(
+    run_id: str,
+    evidence_root: EvidenceRootOption = Path("evidence/_scratch"),
+    operator: OperatorOption = None,
+) -> None:
+    """Take the live session from automation. The run stops touching the browser and starts
+    recording what you do."""
+    who = _operator_id(operator)
+    _act_on(run_id, evidence_root, "take_control", "operator", operator=who)
+    typer.echo(
+        f"{who} holds run {run_id}. Work in the open browser window, then:\n"
+        f"  uv run cua ops hand-back {run_id} --evidence-root {evidence_root} "
+        '--note "what you did"'
+    )
 
 
 @ops_app.command("hand-back")
 def ops_hand_back(
-    run_id: str, note: Annotated[str, typer.Option(help="What you did and why.")] = ""
+    run_id: str,
+    note: Annotated[str, typer.Option(help="What you did and why.")] = "",
+    evidence_root: EvidenceRootOption = Path("evidence/_scratch"),
+    operator: OperatorOption = None,
 ) -> None:
-    """Return control to automation; it re-verifies the checkpoint before continuing."""
-    _not_yet("ops hand-back", 5)
+    """Return control to automation. It re-runs the outcome detectors and re-verifies the step's
+    checkpoint before it carries on, and never repeats the step you were paused on."""
+    _act_on(
+        run_id,
+        evidence_root,
+        "hand_back",
+        "operator",
+        operator=_operator_id(operator),
+        note=note,
+    )
 
 
 @ops_app.command("abort")
-def ops_abort(run_id: str) -> None:
-    """Finish a paused run as escalated with reason 'operator aborted'."""
-    _not_yet("ops abort", 5)
+def ops_abort(
+    run_id: str,
+    evidence_root: EvidenceRootOption = Path("evidence/_scratch"),
+    operator: OperatorOption = None,
+    note: Annotated[str, typer.Option(help="Why you ended it.")] = "operator aborted",
+) -> None:
+    """Finish a run as escalated without resuming it."""
+    _act_on(run_id, evidence_root, "abort", "operator", operator=_operator_id(operator), note=note)
 
 
 RootOption = Annotated[Path, typer.Option("--root", help="Catalog directory.")]

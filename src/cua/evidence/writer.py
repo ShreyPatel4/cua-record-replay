@@ -47,7 +47,7 @@ class EvidenceWriter:
         self.dir = root / run_id
         self.dir.mkdir(parents=True, exist_ok=False)
         self.run_id = run_id
-        self._redactor = redactor
+        self.redactor = redactor
         self._sensitive_pages = list(sensitive_pages)
         self._sensitive: set[str] = set()
 
@@ -58,7 +58,7 @@ class EvidenceWriter:
             "event": event,
             **fields,
         }
-        line = json.dumps(redact_values(record, self._redactor), ensure_ascii=False)
+        line = json.dumps(redact_values(record, self.redactor), ensure_ascii=False)
         with (self.dir / "run.jsonl").open("a", encoding="utf-8") as log:
             log.write(line + "\n")
 
@@ -86,12 +86,12 @@ class EvidenceWriter:
     def snapshot(self, name: str, snapshot: A11ySnapshot, *, mask_amounts: bool = False) -> str:
         """mask_amounts also hides dollar amounts, for a screen that may show a sensitive output
         the run has not read, so its exact value is not known to the redactor."""
-        redact = self._redactor.free_text if mask_amounts else self._redactor.text
+        redact = self.redactor.free_text if mask_amounts else self.redactor.text
         data = snapshot.redacted(redact).model_dump(mode="json")
         return self.write_json(name, data)
 
     def write_json(self, name: str, data: Any) -> str:
-        text = json.dumps(redact_values(data, self._redactor), indent=2, ensure_ascii=False)
+        text = json.dumps(redact_values(data, self.redactor), indent=2, ensure_ascii=False)
         (self.dir / name).write_text(text + "\n", encoding="utf-8")
         return name
 

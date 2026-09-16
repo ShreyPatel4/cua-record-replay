@@ -27,8 +27,17 @@ from cua.policy.gate import PolicyGate
 from cua.policy.models import Policy, PolicyError, load_policy
 from cua.policy.redact import MIN_SECRET_LEN, Redactor
 from cua.replay.conditions import ConditionSurface
-from cua.replay.engine import Clock, Escalation, ReplayEngine, no_operator
+from cua.replay.engine import (
+    Clock,
+    Escalation,
+    Handback,
+    ReplayEngine,
+    RunStopped,
+    no_operator,
+)
 from cua.replay.result import IterationSummary, ReplayResult, StabilityReport, outputs_digest
+from cua.session.intervention import ReasonCode
+from cua.session.state import file_control
 from cua.vocab import template_refs
 
 EXTRA_SECRET_ENV = ("ANTHROPIC_API_KEY",)
@@ -40,7 +49,22 @@ class ReplaySurface(ConditionSurface, Protocol):
     def close(self) -> None: ...
 
 
-SurfaceFactory = Callable[[], ReplaySurface]
+# The surface is opened with the control hook that decides whether automation may act: while a
+# human holds the session, every act and every read through it raises NotInControl.
+Control = Callable[[], None]
+SurfaceFactory = Callable[[Control], ReplaySurface]
+
+
+class EscalationChannel(Protocol):
+    """An escalation hook that also has to be told when the run is over, such as the operator
+    channel, which owns the session file the ops CLI reads."""
+
+    def __call__(self, stop: RunStopped, reason: ReasonCode) -> RunStopped | Handback: ...
+
+    def close(self, status: str) -> None: ...
+
+
+OpenEscalation = Callable[[EvidenceWriter, ReplaySurface], EscalationChannel]
 
 
 @dataclass(frozen=True)
@@ -183,6 +207,7 @@ def run_replay(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     clock: Callable[[ReplaySurface], Clock] | None = None,
     escalation: Escalation = no_operator,
+    open_escalation: OpenEscalation | None = None,
 ) -> ReplayResult:
     """One replay. Refusals, results, and crashes alike leave result.json and a manifest."""
     base = request.capability
@@ -222,7 +247,8 @@ def run_replay(
         evidence.event("replay", "run_refused", code=refused.code, message=result.message)
         return _conclude(result, base, evidence)
 
-    surface = open_surface()
+    surface = open_surface(file_control(evidence.dir / "session_state.json"))
+    channel = open_escalation(evidence, surface) if open_escalation else None
     try:
         gated = GatedSurface(
             surface, surface, PolicyGate(policy), confirm_irreversible=request.confirm_irreversible
@@ -241,8 +267,10 @@ def run_replay(
             started_at=started,
             tenant=request.tenant,
             clock=clock(surface) if clock else None,
-            escalation=escalation,
+            escalation=channel or escalation,
         ).run()
+        if channel is not None:
+            channel.close(result.status)
         _keep_or_discard_trace(surface, result, redactor, evidence)
     except BaseException as exc:
         _record_crash(evidence, redactor, exc)

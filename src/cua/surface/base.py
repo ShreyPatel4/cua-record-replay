@@ -274,6 +274,24 @@ class SurfaceEvent:
     act_id: int | None = None
 
 
+@dataclass(frozen=True)
+class HumanEvent:
+    """One thing a human did while they held the session, as the surface saw it.
+
+    Raw: value is whatever they typed, so only a redacting sink may write it down.
+    """
+
+    kind: Literal["click", "input", "change", "navigate", "dialog"]
+    frame_url: str
+    role: str | None = None
+    name: str | None = None
+    text: str | None = None
+    value: str | None = None
+    # True when the element they typed into looks like a credential field, so the sink can add the
+    # value to the redactor instead of trusting it to be one it already knows.
+    credential_field: bool = False
+
+
 @dataclass
 class ActResult:
     ok: bool
@@ -351,4 +369,18 @@ class Surface(Protocol):
     def session_tokens(self) -> list[str]:
         """Values the app holds the session with right now (cookies on the web), so evidence
         such as a trace can be scrubbed of them."""
+        ...
+
+    def bring_to_front(self) -> None:
+        """Put the session's window where the operator taking control can see it."""
+        ...
+
+    def start_human_capture(self, sink: Callable[[HumanEvent], None]) -> None:
+        """Report what the human does while they hold the session. The sink gets one event per
+        click, typed value, selection, or navigation; values reach it unredacted, so the caller
+        redacts before writing anything down."""
+        ...
+
+    def stop_human_capture(self) -> None:
+        """Stop reporting. Safe to call when no capture is running."""
         ...
