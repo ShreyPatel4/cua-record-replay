@@ -704,7 +704,7 @@ def test_a_password_typed_by_hand_reaches_neither_the_action_log_nor_the_trace(
     assert {"human_actions.jsonl", "trace.zip", "session_state.json"} <= flagged
 
 
-SUBACCOUNT_ARTIFACT = ROOT / "artifacts" / "coreledger.member.open_subaccount@1.1.0.capability.json"
+SUBACCOUNT_ARTIFACT = ROOT / "artifacts" / "coreledger.member.open_subaccount@2.0.0.capability.json"
 SUBACCOUNT_INPUTS = {
     "member_number": "10007",
     "account_type": "Holiday Club",
@@ -784,7 +784,7 @@ def test_a_deposit_below_the_minimum_is_an_answer_and_creates_nothing(
     assert coreledger.state.ledger.subaccounts == {}
 
 
-def test_an_account_type_the_app_does_not_offer_names_that_input(
+def test_an_account_type_the_app_does_not_offer_stops_at_the_select(
     replayer: Replayer, opener: Capability, coreledger: RunningMockApp
 ) -> None:
     result = _open_subaccount(
@@ -795,3 +795,30 @@ def test_an_account_type_the_app_does_not_offer_names_that_input(
     assert (result.status, result.outcome_code) == ("hard_failure", "ACTION_FAILED")
     assert coreledger.state.ledger.subaccounts == {}
     assert result.step_reached == "s08"
+
+
+def test_an_amount_the_app_reformats_is_still_a_success(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp
+) -> None:
+    """CoreLedger renders 1000.00 as $1,000.00. A success checkpoint asserting the typed text
+    would report a hard failure on a run that did exactly what it was asked, and the caller's
+    retry would open a second real sub-account."""
+    result = _open_subaccount(
+        replayer, opener, confirm_irreversible=True, inputs={"initial_deposit": "1000.00"}
+    )
+    assert (result.status, result.exit_code) == ("success", 0)
+    assert len(coreledger.state.ledger.subaccounts) == 1
+    opened = next(iter(coreledger.state.ledger.subaccounts.values()))
+    assert str(opened.initial_deposit) == "1000.00"
+
+
+def test_a_session_that_expires_before_the_create_click_says_so(
+    replayer: Replayer, opener: Capability, coreledger: RunningMockApp, inject: Injector
+) -> None:
+    """The one condition in this flow with no recovery: replay will not sign in again and click
+    create for you. It names the cause instead of reporting a checkpoint timeout."""
+    inject("session_expired", times=1, on="create")
+    result = _open_subaccount(replayer, opener, confirm_irreversible=True)
+    assert result.outcome_code == "SESSION_EXPIRED_AT_CREATE"
+    assert result.step_reached == "s11"
+    assert coreledger.state.ledger.subaccounts == {}

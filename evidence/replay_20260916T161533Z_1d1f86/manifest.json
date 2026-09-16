@@ -1,0 +1,54 @@
+{
+  "run_id": "replay_20260916T161533Z_1d1f86",
+  "files": [
+    {
+      "path": "result.json",
+      "sha256": "185731cfb5bf15f38347e62cd09f585c674c8a4c6e8f414994e9867188ae3925",
+      "bytes": 2046,
+      "sensitive": false
+    },
+    {
+      "path": "run.jsonl",
+      "sha256": "519c1e42d83334c49f00b75744e8fe19178784321b6fc4d026c8a023376c6afb",
+      "bytes": 7562,
+      "sensitive": false
+    },
+    {
+      "path": "step_01.png",
+      "sha256": "01ff1b1951393485310c132e44dae0fedf0e4a6cc98fe9dbede678104cfedb9d",
+      "bytes": 19519,
+      "sensitive": true
+    },
+    {
+      "path": "step_02.png",
+      "sha256": "6eb3d35f0fe33169735be33331cb097c42dcc4525a98ec56fcf22db3f87de0b8",
+      "bytes": 20941,
+      "sensitive": true
+    },
+    {
+      "path": "step_03.png",
+      "sha256": "b4e9707d4c4e19f4e3c1685b906e27b22f017ae5b4b7066cb9c16de7852eabd1",
+      "bytes": 21185,
+      "sensitive": true
+    },
+    {
+      "path": "step_04.png",
+      "sha256": "54dd6cc0e827f53c425b7f3b5b066afe390ab35c63185a00c881e264ba86eae1",
+      "bytes": 17457,
+      "sensitive": true
+    },
+    {
+      "path": "step_05.png",
+      "sha256": "8bac4050e99f1b37a5cc3766ae5dfecda06d01c4428aa81aa54475d16ba35e0b",
+      "bytes": 18359,
+      "sensitive": true
+    },
+    {
+      "path": "step_06.png",
+      "sha256": "e4d9d403e7ba04ac2f201d0e7cdf11bc9d1ec4cc939653849070b2509799ae26",
+      "bytes": 39948,
+      "sensitive": true
+    }
+  ],
+  "purge_note": "Files flagged sensitive are screenshots of sign-in pages, of member records, or of screens showing a sensitive output, plus traces, which keep page DOM. Screenshots are not image-redacted; delete flagged files before sharing evidence outside the team."
+}

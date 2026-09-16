@@ -5,7 +5,7 @@ Exit codes: 0 success or business outcome, 1 usage or internal error, 2 hard fai
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from dotenv import load_dotenv
@@ -31,11 +31,6 @@ mock_app_cli = typer.Typer(no_args_is_help=True, help="Run the local CoreLedger 
 app.add_typer(ops_app, name="ops")
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(mock_app_cli, name="mock")
-
-
-def _not_yet(command: str, phase: int) -> NoReturn:
-    typer.echo(f"cua {command}: not implemented yet (lands in phase {phase})", err=True)
-    raise typer.Exit(code=1)
 
 
 @app.callback()

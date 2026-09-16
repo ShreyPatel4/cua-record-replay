@@ -1,7 +1,6 @@
 """The operator channel: what a stuck replay run does when a human has to take the live session.
 
-It writes the intervention, waits on the shared state file, captures what the human does, and
-hands the engine back a Handback (re-verify) or an escalated stop (nobody came, or they aborted).
+It writes the intervention, waits on the state file, captures the human, and hands back or ends.
 """
 
 from __future__ import annotations

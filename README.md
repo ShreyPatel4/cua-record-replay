@@ -121,12 +121,18 @@ unless `--allow-draft` is passed, so a human reviews it, adds the outcome detect
 cannot observe, and approves it:
 
 ```sh
-uv run cua catalog show coreledger.member.open_subaccount --version 1.1.0
-uv run cua catalog approve coreledger.member.open_subaccount --version 1.1.0 --by "Your Name"
+uv run cua catalog show coreledger.member.open_subaccount --version 2.0.0
 ```
 
-Both artifacts in `artifacts/` come from real runs: `@1.0.0` is what discovery recorded, `@1.1.0`
-is what the review made replayable.
+The approval that shipped was `cua catalog approve coreledger.member.open_subaccount --version
+2.0.0 --by "Shrey Patel"`. Running it again errors: an approved file is never re-approved, and a
+draft is never edited in place. A new review is a new version.
+
+`artifacts/` holds every version of both capabilities, and each one came from a real run.
+`@1.0.0` is what discovery recorded. `@1.1.0` is the first review, which added the outcome
+detectors. `@2.0.0` is the second, after a review found that the success checkpoint asserted an
+amount the app reformats; renaming an outcome code along with it is a contract change for callers,
+so the version rule made it a major bump. Every `review_notes` says what changed and why.
 
 ## Safety
 
@@ -138,8 +144,9 @@ is what the review made replayable.
   file, zip members included.
 - Member and account numbers keep their last four digits. Values declared as outputs are masked
   from the moment they are declared.
-- Screenshots are not image-redacted. The manifest flags the ones taken on a sign-in page or after
-  a sensitive value could be on screen; delete flagged files before sharing a run.
+- Screenshots are not image-redacted. The manifest flags the ones taken on a sign-in page, on a
+  member record, or after a sensitive value could be on screen; delete flagged files before
+  sharing a run.
 - The mock app holds only synthetic data.
 
 ## Gates
@@ -165,3 +172,4 @@ uvx pre-commit install                     # ruff plus the leak scan on every co
 | `src/cua/surface/` | The Surface seam: Playwright today, a desktop stub beside it |
 | `mock_app/` | CoreLedger and its failure injections |
 | `DECISIONS.md` | Every decision, when it was taken, and who approved it |
+| `CLAUDE.md` | The working contract this was built against, kept in the repo on purpose |

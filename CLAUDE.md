@@ -491,6 +491,31 @@ the same commit as the change. This file keeps the reasoning; that one keeps the
   operator id, an identity rather than a credential, never survives redaction into an artifact or
   an evidence file in any encoding.
 
+### Fixed after the phase 6 review (1 high correctness bug, 3 high, 6 medium, lows and nits)
+
+- The success checkpoint asserted the initial deposit, which CoreLedger renders through its own
+  formatter: 1000.00 comes back as $1,000.00, the check fails, and the caller retries a run that
+  had already created the sub-account. The recorder now keeps amounts out of derived checkpoints
+  and the capability shipped again as `@2.0.0`. This was the only way to double-submit s11.
+- `@2.0.0` also renames the notice detector to `INTERSTITIAL`, the code the balance capability
+  already uses for the same screen, and adds `od_session_expired_at_create`: an expiry between the
+  last field and the create click had no detector and read as a checkpoint timeout. It is a
+  hard failure with its own code, never a recovery, because re-signing in and clicking create
+  again is not replay's decision. The mock's `session_expired` injection gained `on=create` so the
+  detector is reachable and tested.
+- Run ids were being redacted out of `result.json` (a random suffix looks like a record number),
+  so the file disagreed with the manifest beside it. `run_id` and `evidence_dir` are now
+  unredacted keys, and every committed run was regenerated.
+- A member record is now a sensitive page in the policy, so its screenshots are flagged whatever
+  the running capability reads. Every evidence manifest was regenerated for that too.
+- README's approve command failed as written, because `@2.0.0` is already approved. It now shows
+  what was run and says that re-running it errors by design.
+- REPORT.md uses the brief's exact headings, with the ampersands.
+- Dead code (`_not_yet`) deleted; `operator.py` back to a two-line module docstring; a test
+  renamed to say what it actually asserts.
+- The final leak sweep covers every tracked file plus every zip member; a test pins that the
+  operator id never survives into an artifact or an evidence file.
+
 ## Runtime semantics the schema now pins (field descriptions are the spec)
 
 - Every wait is a poll loop (about 250 ms). Each tick evaluates the step's in-scope detectors in

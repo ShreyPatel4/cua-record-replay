@@ -303,9 +303,22 @@ def _new_heading(
     return None
 
 
+_AMOUNT_LITERAL = re.compile(r"[$,]|\d\.\d")
+
+
 def _visible_in_frame(literal: str, snapshot: A11ySnapshot, frame: list[str]) -> bool:
     pattern = _word_boundary(literal)
     return any(pattern.search(label) for _, label in _frame_labels(snapshot, frame))
+
+
+def _reformatted_on_screen(literal: str) -> bool:
+    """Whether the app is likely to render this value in a shape other than the one typed.
+
+    An amount goes through the app's own formatter: 1000.00 typed comes back as $1,000.00, and a
+    checkpoint asserting the typed text would then fail on a run that did exactly what was asked.
+    The value still proves nothing useful as a checkpoint, so it is left out of one.
+    """
+    return bool(_AMOUNT_LITERAL.search(literal))
 
 
 def _relative_to_entry(url: str, entry_url: str) -> str:
@@ -395,6 +408,7 @@ def build_capability(
                 TextPresent(kind="text_present", text=f"{{{{inputs.{p.name}}}}}", frame_path=frame)
                 for p in params
                 if _visible_in_frame(p.literal, step.after, frame)
+                and not _reformatted_on_screen(p.literal)
             ]
         if changed or index == last:
             conditions += [

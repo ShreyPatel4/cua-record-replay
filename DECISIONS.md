@@ -46,6 +46,12 @@ his behalf and confirmed it at the phase stop.
 | 36 | 2026-09-16 | 6 | `od_session_expired` is scoped to s06 and s07, never to s11: recovering at the create step would re-submit an irreversible POST after a session bounce, which is a human's call. | Delegated | `review_notes` in the artifact |
 | 37 | 2026-09-16 | 6 | Each rejected input gets its own VALIDATION_ERROR detector so the result can name the input the caller got wrong. | Delegated | `artifacts/coreledger.member.open_subaccount@1.1.0.capability.json` |
 | 38 | 2026-09-16 | 6 | An error tool result carries text only, with the screen beside it in the same turn. The API rejects an image inside an error result, which killed a real discovery run with a 400. | Delegated | `src/cua/discover/loop.py` |
+| 39 | 2026-09-16 | 6 | A derived success checkpoint never asserts an amount: the app reformats it, so the check fails a run that did exactly what it was asked and the caller retries into a second real record. | Delegated | phase 6 review, finding 1 |
+| 40 | 2026-09-16 | 6 | `open_subaccount@2.0.0` after the phase 6 review: deposit condition removed, the notice detector renamed to the family's `INTERSTITIAL`, and a create-time expiry detector added. The rename makes it a major bump under the project's own versioning rule. | Delegated | `review_notes` in the artifact |
+| 41 | 2026-09-16 | 6 | `policy_ref` is a bare policy id, not a file path: which file the policies live in is deployment configuration. | Delegated | REPORT.md, Artifact schema |
+| 42 | 2026-09-16 | 6 | A member record is a sensitive page in its own right, so its screenshots are flagged whatever the running capability reads. Over-flagging in the safe direction: the lookup form matches too. | Delegated | `policy/allowlist.yaml` |
+| 43 | 2026-09-16 | 6 | Run ids and evidence paths are never redacted: masking their digits made `result.json` disagree with the manifest beside it. | Delegated | `src/cua/evidence/writer.py` |
+| 44 | 2026-09-16 | 6 | Every committed evidence run was regenerated after these changes, so no run predates the code or the policy that produced it. | Delegated | evidence/README.md |
 
 ## Still open
 

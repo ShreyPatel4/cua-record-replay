@@ -1,0 +1,81 @@
+{
+  "status": "success",
+  "capability_id": "coreledger.member.read_savings_balance",
+  "capability_version": "1.1.0",
+  "tenant": null,
+  "run_id": "replay_20260916T161609Z_be4d00",
+  "started_at": "2026-09-16T16:16:09.967070Z",
+  "duration_ms": 2187,
+  "inputs": {
+    "member_number": "*0007"
+  },
+  "outputs": {
+    "savings_balance": "[REDACTED]"
+  },
+  "outcome_code": null,
+  "message": null,
+  "field_errors": [],
+  "step_reached": "s06",
+  "expected": null,
+  "observed": null,
+  "steps": [
+    {
+      "step_id": "s01",
+      "action": "navigate",
+      "resolved_rung": null,
+      "resolved_strategy": null,
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 210
+    },
+    {
+      "step_id": "s02",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 353
+    },
+    {
+      "step_id": "s03",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 384
+    },
+    {
+      "step_id": "s04",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 222
+    },
+    {
+      "step_id": "s05",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 349
+    },
+    {
+      "step_id": "s06",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "text_exact",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 230
+    }
+  ],
+  "recoveries": [],
+  "warnings": [],
+  "evidence_dir": "evidence/stability_20260916T161607Z_d9e325/replay_20260916T161609Z_be4d00",
+  "intervention_path": null
+}

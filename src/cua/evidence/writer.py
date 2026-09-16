@@ -18,8 +18,10 @@ from cua.policy.redact import Redactor
 from cua.surface.base import A11ySnapshot
 
 Actor = Literal["model", "discovery", "replay", "human", "policy", "operator"]
-# Values that are machine identifiers, not page data: redacting them only corrupts them.
-UNREDACTED_KEYS = frozenset({"ts", "digest", "sha256"})
+# Values that are machine identifiers, not page data: redacting them only corrupts them. A run id
+# holds a random suffix that looks like a record number, and masking it made result.json disagree
+# with the manifest in the same directory.
+UNREDACTED_KEYS = frozenset({"ts", "digest", "sha256", "run_id", "evidence_dir"})
 
 
 def redact_values(value: Any, redactor: Redactor) -> Any:
@@ -120,9 +122,10 @@ class EvidenceWriter:
         manifest = {
             "run_id": self.run_id,
             "files": files,
-            "purge_note": "Files flagged sensitive are screenshots of sign-in pages or of screens "
-            "showing a sensitive output. Screenshots are not image-redacted; delete flagged files "
-            "before sharing evidence outside the team.",
+            "purge_note": "Files flagged sensitive are screenshots of sign-in pages, of member "
+            "records, or of screens showing a sensitive output, plus traces, which keep page DOM. "
+            "Screenshots are not image-redacted; delete flagged files before sharing evidence "
+            "outside the team.",
         }
         path = self.dir / "manifest.json"
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

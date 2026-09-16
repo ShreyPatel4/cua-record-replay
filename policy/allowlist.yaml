@@ -38,6 +38,11 @@ policies:
     irreversible_handling: escalate
     sensitive_pages:
       - /login
+      # A member record and everything under it shows balances and account numbers whatever the
+      # running capability happens to read, so those screenshots are flagged for anyone deciding
+      # what to share. The lookup form matches too, which is over-flagging in the safe direction.
+      - /members/*
+      - /members/**
 
   coreledger-subaccount:
     extends: coreledger-readonly

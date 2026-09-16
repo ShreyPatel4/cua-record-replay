@@ -295,7 +295,10 @@ def test_the_model_and_the_evidence_never_see_secrets_or_full_member_numbers(
     flagged = {f["path"] for f in manifest["files"] if f["sensitive"]}
     assert "step_00.png" in flagged, "the sign-in screen is a sensitive page"
     assert "step_05.png" in flagged, "the screen showing the sensitive output"
-    assert "step_04.png" not in flagged
+    # A member record is a sensitive page in its own right, whatever the capability reads from it,
+    # so every screen from the lookup on is flagged. The pre-login screens are not.
+    assert "step_00.png" in flagged
+    assert flagged == {f"step_{n:02d}.png" for n in range(6)}
     log = (evidence / "run.jsonl").read_text()
     savings = coreledger.state.ledger.members["10007"].savings
     for form in (money(savings), f"{savings:,.2f}", f"{savings:.2f}"):

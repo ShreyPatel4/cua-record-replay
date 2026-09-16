@@ -280,7 +280,7 @@ def create_app(settings: MockSettings | None = None) -> Flask:
     @app.get("/members/<member_id>")
     @login_required
     def member_detail(member_id: str) -> AnyResponse:
-        if _fault("session_expired") is not None:
+        if _fault("session_expired", at="detail") is not None:
             return _expire_session_and_redirect()
         slow = _fault("slow")
         if slow is not None:
@@ -317,6 +317,10 @@ def create_app(settings: MockSettings | None = None) -> Flask:
     @login_required
     def subaccount_create(member_id: str) -> AnyResponse:
         st = _state()
+        # Before anything is written: an expiry here creates nothing, which is what lets replay
+        # report it plainly instead of leaving a caller wondering whether the record exists.
+        if _fault("session_expired", at="create") is not None:
+            return _expire_session_and_redirect()
         if _fault("app_error", at="create") is not None:
             return _app_error()
         member = _member_or_none(member_id)

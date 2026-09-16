@@ -33,7 +33,8 @@ DESCRIPTIONS: dict[str, str] = {
     "validation_error": "Sub-account create rejects the initial deposit regardless of value.",
     "interstitial": "Member detail hides behind a 'System notice' until OK. params: sticky=1.",
     "slow": f"Member detail responds after ms milliseconds (default {DEFAULT_SLOW_MS}).",
-    "session_expired": "Member detail kills the session and redirects to sign-in. Fires once.",
+    "session_expired": "Kills the session and redirects to sign-in. params: on=detail (default) "
+    "or create, which expires between the last field and the create POST. Fires once.",
     "permission_denied": "Returns an 'Access denied' 403. params: on=create (default) or detail.",
     "app_error": "Returns an 'Internal Server Error' 500. params: on=detail|search|create.",
     "layout_drift": "Search page relabels 'Find' to 'Search' and moves it one cell right.",
@@ -43,6 +44,7 @@ DESCRIPTIONS: dict[str, str] = {
 SITES: dict[str, tuple[str, ...]] = {
     "permission_denied": ("create", "detail"),
     "app_error": ("detail", "search", "create"),
+    "session_expired": ("detail", "create"),
 }
 
 # session_expired defaults to one shot so "recover once" is the default behaviour; arm it with

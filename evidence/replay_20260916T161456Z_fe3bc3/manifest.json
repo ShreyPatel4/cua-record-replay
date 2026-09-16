@@ -1,0 +1,66 @@
+{
+  "run_id": "replay_20260916T161456Z_fe3bc3",
+  "files": [
+    {
+      "path": "a11y_06.json",
+      "sha256": "6730e4cfbb62a620bdaeafaf5f8f36ae48985f402ece194f25484bfe8e5122bd",
+      "bytes": 7390,
+      "sensitive": true
+    },
+    {
+      "path": "result.json",
+      "sha256": "b2625d717a266d706638e6bbde946780705235cf68c7f2e0dafab01ff50b494a",
+      "bytes": 2139,
+      "sensitive": false
+    },
+    {
+      "path": "run.jsonl",
+      "sha256": "532db16118d47a3685b8c0942db29d0c13ee9ad5212c00848851eaa4c6d7bbba",
+      "bytes": 6666,
+      "sensitive": false
+    },
+    {
+      "path": "step_01.png",
+      "sha256": "01ff1b1951393485310c132e44dae0fedf0e4a6cc98fe9dbede678104cfedb9d",
+      "bytes": 19519,
+      "sensitive": true
+    },
+    {
+      "path": "step_02.png",
+      "sha256": "6eb3d35f0fe33169735be33331cb097c42dcc4525a98ec56fcf22db3f87de0b8",
+      "bytes": 20941,
+      "sensitive": true
+    },
+    {
+      "path": "step_03.png",
+      "sha256": "b4e9707d4c4e19f4e3c1685b906e27b22f017ae5b4b7066cb9c16de7852eabd1",
+      "bytes": 21185,
+      "sensitive": true
+    },
+    {
+      "path": "step_04.png",
+      "sha256": "a05f1f31965a1ae76131cfab3fa5d11360fdf0dada740d74bc0e8783b16b62b8",
+      "bytes": 16625,
+      "sensitive": true
+    },
+    {
+      "path": "step_05.png",
+      "sha256": "0524c366358c8da532028da91a327b592b19905e6749eaa5b3c1a646d1887212",
+      "bytes": 17685,
+      "sensitive": true
+    },
+    {
+      "path": "step_06.png",
+      "sha256": "a35ea72729c7e30e22f9be620ca273c2489e73227b98ccf21f4ba010bf4c5cd6",
+      "bytes": 30000,
+      "sensitive": true
+    },
+    {
+      "path": "trace.zip",
+      "sha256": "6a268e544ea7557f97c2e94ab766e81c4f547542621c3aed5b09cbfca658430b",
+      "bytes": 380509,
+      "sensitive": true
+    }
+  ],
+  "purge_note": "Files flagged sensitive are screenshots of sign-in pages, of member records, or of screens showing a sensitive output, plus traces, which keep page DOM. Screenshots are not image-redacted; delete flagged files before sharing evidence outside the team."
+}

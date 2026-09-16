@@ -1,0 +1,132 @@
+{
+  "status": "business_outcome",
+  "capability_id": "coreledger.member.open_subaccount",
+  "capability_version": "2.0.0",
+  "tenant": null,
+  "run_id": "replay_20260916T161448Z_c1dd90",
+  "started_at": "2026-09-16T16:14:48.017008Z",
+  "duration_ms": 4143,
+  "inputs": {
+    "member_number": "*0007",
+    "account_type": "Holiday Club",
+    "nickname": "Vacation fund",
+    "initial_deposit": "1.00"
+  },
+  "outputs": {},
+  "outcome_code": "VALIDATION_ERROR",
+  "message": "Initial deposit must be at least $5.00.",
+  "field_errors": [
+    {
+      "field": "initial_deposit",
+      "message": "Initial deposit must be at least $5.00."
+    }
+  ],
+  "step_reached": "s11",
+  "expected": null,
+  "observed": "Initial deposit must be at least $5.00.",
+  "steps": [
+    {
+      "step_id": "s01",
+      "action": "navigate",
+      "resolved_rung": null,
+      "resolved_strategy": null,
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 233
+    },
+    {
+      "step_id": "s02",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 363
+    },
+    {
+      "step_id": "s03",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 388
+    },
+    {
+      "step_id": "s04",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 222
+    },
+    {
+      "step_id": "s05",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 347
+    },
+    {
+      "step_id": "s06",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "text_exact",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 253
+    },
+    {
+      "step_id": "s07",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "role_name",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 221
+    },
+    {
+      "step_id": "s08",
+      "action": "select_option",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 352
+    },
+    {
+      "step_id": "s09",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 355
+    },
+    {
+      "step_id": "s10",
+      "action": "type_text",
+      "resolved_rung": 0,
+      "resolved_strategy": "label_text",
+      "passed": true,
+      "attempts": 1,
+      "duration_ms": 351
+    },
+    {
+      "step_id": "s11",
+      "action": "click",
+      "resolved_rung": 0,
+      "resolved_strategy": "text_exact",
+      "passed": false,
+      "attempts": 1,
+      "duration_ms": 210
+    }
+  ],
+  "recoveries": [],
+  "warnings": [],
+  "evidence_dir": "evidence/replay_20260916T161448Z_c1dd90",
+  "intervention_path": null
+}
