@@ -14,6 +14,12 @@ uv run pytest
 
 Git: SSH remote only, identity from global config, no Co-Authored-By or Claude attribution lines.
 
+## Decision log
+
+`DECISIONS.md` is the append-only audit trail: one row per decision that changed what the system
+does, with the date and who approved it. Add a row whenever a decision is taken or confirmed, in
+the same commit as the change. This file keeps the reasoning; that one keeps the record.
+
 ## Deviations from the kickoff, decided in phase 0
 
 - `docs/brief.pdf` is gitignored. It is interface.ai's document; the public repo should not
